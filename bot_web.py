@@ -168,6 +168,7 @@ def deezer_search(query):
                 "artist": artist,
                 "title": title,
                 "preview": preview,
+                "link": song.get("link", ""),
                 "duration": song.get("duration", 0),
                 "score": score_result(query, artist, title)
             })
