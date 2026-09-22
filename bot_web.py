@@ -3,7 +3,7 @@ import re
 import json
 import requests
 from flask import Flask, request
-
+from music_database import conectar
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
