@@ -371,23 +371,22 @@ def send_song(chat_id, item):
 
 link = item.get("link", "")
 
-if link:
-    send_message(
-        chat_id,
-        "🎵 Escuchá la canción completa:",
-        {
-            "inline_keyboard": [
-                [
-                    {
-                        "text": "🔗 Escuchar canción completa",
-                        "url": link
-                    }
+    if link:
+        send_message(
+            chat_id,
+            "🎵 Escuchá la canción completa:",
+            {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "🔗 Escuchar canción completa",
+                            "url": link
+                        }
+                    ]
                 ]
-            ]
-        }
-    )
+            }
+        )
 
-    print("AUDIO RESULT:", result)
 
     if not result.get("ok"):
         send_message(
