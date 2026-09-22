@@ -20,3 +20,21 @@ def crear_base():
 
     db.commit()
     db.close()
+
+def buscar_cancion(artista, titulo):
+    db = conectar()
+    cursor = db.cursor()
+
+    cursor.execute("""
+        SELECT file_id, duracion
+        FROM canciones
+        WHERE artista = ? AND titulo = ?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (artista, titulo))
+
+    resultado = cursor.fetchone()
+
+    db.close()
+
+    return resultado
