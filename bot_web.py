@@ -3,14 +3,18 @@ import re
 import json
 import requests
 from flask import Flask, request
+
 from music_database import conectar
 from music_database import crear_base
+
 
 app = Flask(__name__)
 
 crear_base()
+
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
 
 SEARCH_RESULTS = {}
 USER_SEARCHES = {}
@@ -45,6 +49,7 @@ def telegram(method, data=None):
 
     except Exception as e:
         print("TELEGRAM ERROR:", repr(e))
+
         return {
             "ok": False,
             "description": str(e)
@@ -186,6 +191,7 @@ def deezer_search(query):
                 response.status_code,
                 response.text[:500]
             )
+
             return []
 
         data = response.json()
@@ -220,6 +226,7 @@ def deezer_search(query):
 
     except Exception as e:
         print("DEEZER EXCEPTION:", repr(e))
+
         return []
 
 
@@ -245,7 +252,6 @@ def search_music(query):
     # Intentar detectar artista + título
     if len(query_words) >= 2:
 
-        # Buscar todas las combinaciones posibles
         for split in range(1, len(query_words)):
 
             artist_part = " ".join(
@@ -289,7 +295,7 @@ def search_music(query):
             unique[song_id] = item
 
         else:
-            # conservar la versión con mejor puntuación
+
             if item.get("score", 0) > unique[song_id].get("score", 0):
                 unique[song_id] = item
 
@@ -417,6 +423,47 @@ def send_song(chat_id, item):
     )
 
     print("AUDIO RESULT:", result)
+
+    # Guardar file_id en SQLite
+    if result.get("ok"):
+
+        try:
+
+            file_id = result["result"]["audio"]["file_id"]
+
+            db = conectar()
+            cursor = db.cursor()
+
+            cursor.execute(
+                """
+                INSERT INTO canciones
+                (artista, titulo, file_id, duracion)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    artist,
+                    title,
+                    file_id,
+                    item.get("duration", 0)
+                )
+            )
+
+            db.commit()
+            db.close()
+
+            print(
+                "FILE_ID GUARDADO:",
+                artist,
+                "-",
+                title
+            )
+
+        except Exception as e:
+
+            print(
+                "ERROR GUARDANDO FILE_ID:",
+                repr(e)
+            )
 
     # Botón para escuchar la canción completa
     # directamente en Deezer
@@ -550,9 +597,7 @@ def webhook():
 
                 buttons = []
 
-                for index, search in enumerate(
-                    reversed(searches)
-                ):
+                for search in reversed(searches):
 
                     buttons.append(
                         [
