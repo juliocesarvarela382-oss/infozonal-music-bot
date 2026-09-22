@@ -5,7 +5,9 @@ import requests
 from flask import Flask, request
 from music_database import conectar
 app = Flask(__name__)
+from music_database import crear_base
 
+crear_base()
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
