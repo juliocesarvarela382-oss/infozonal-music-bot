@@ -1,6 +1,7 @@
 import os
 import re
 import requests
+import json
 from flask import Flask, request
 
 app = Flask(__name__)
@@ -43,7 +44,7 @@ def send_message(chat_id, text, reply_markup=None):
     }
 
     if reply_markup:
-        data["reply_markup"] = reply_markup
+        data["reply_markup"] = json.dumps(reply_markup)
 
     return telegram("sendMessage", data)
 
