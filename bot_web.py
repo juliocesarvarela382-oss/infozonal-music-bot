@@ -359,13 +359,31 @@ def send_song(chat_id, item):
     )
 
     result = telegram(
-        "sendAudio",
+    "sendAudio",
+    {
+        "chat_id": chat_id,
+        "audio": preview,
+        "title": title,
+        "performer": artist,
+        "caption": "Preview de 30 segundos"
+    }
+)
+
+link = item.get("link", "")
+
+if link:
+    send_message(
+        chat_id,
+        "🎵 Escuchá la canción completa:",
         {
-            "chat_id": chat_id,
-            "audio": preview,
-            "title": title,
-            "performer": artist,
-            "caption": "Preview de 30 segundos"
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "🔗 Escuchar canción completa",
+                        "url": link
+                    }
+                ]
+            ]
         }
     )
 
