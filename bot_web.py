@@ -1,21 +1,21 @@
 import os
 import re
-import requests
 import json
+import requests
 from flask import Flask, request
 
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-
-if not BOT_TOKEN:
-    print("ADVERTENCIA: BOT_TOKEN no configurado")
-
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 SEARCH_RESULTS = {}
 USER_SEARCHES = {}
 
+
+# =========================
+# TELEGRAM
+# =========================
 
 def telegram(method, data=None):
     try:
@@ -25,16 +25,27 @@ def telegram(method, data=None):
             timeout=30
         )
 
-        print("TELEGRAM:", method, response.status_code)
+        print(
+            "TELEGRAM:",
+            method,
+            response.status_code,
+            response.text[:500]
+        )
 
         try:
             return response.json()
         except Exception:
-            return {}
+            return {
+                "ok": False,
+                "description": response.text
+            }
 
     except Exception as e:
-        print("ERROR TELEGRAM:", e)
-        return {}
+        print("TELEGRAM ERROR:", repr(e))
+        return {
+            "ok": False,
+            "description": str(e)
+        }
 
 
 def send_message(chat_id, text, reply_markup=None):
@@ -58,26 +69,41 @@ def answer_callback(callback_id):
     )
 
 
+# =========================
+# MENÚ PRINCIPAL
+# =========================
+
 def main_menu():
     return {
         "keyboard": [
             [
-                {"text": "Buscar musica"},
-                {"text": "Mis busquedas"}
+                {
+                    "text": "🔎 Buscar música"
+                }
             ],
             [
-                {"text": "Ayuda"},
-                {"text": "InfoZonal"}
+                {
+                    "text": "🎧 Mis búsquedas"
+                }
+            ],
+            [
+                {
+                    "text": "ℹ️ InfoZonal"
+                },
+                {
+                    "text": "❓ Ayuda"
+                }
             ]
         ],
         "resize_keyboard": True
     }
 
 
-def normalize(text):
-    if not text:
-        return ""
+# =========================
+# NORMALIZACIÓN
+# =========================
 
+def normalize(text):
     text = text.lower().strip()
 
     replacements = {
@@ -92,61 +118,71 @@ def normalize(text):
     for old, new in replacements.items():
         text = text.replace(old, new)
 
-    text = re.sub(r"[^a-z0-9ñ\s]", " ", text)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
 def words(text):
-    return set(normalize(text).split())
+    return normalize(text).split()
 
+
+# =========================
+# PUNTUACIÓN DE RESULTADOS
+# =========================
 
 def score_result(query, artist, title):
     q = normalize(query)
     a = normalize(artist)
     t = normalize(title)
 
-    if not a or not t:
-        return 0
-
     score = 0
 
-    q_words = words(q)
-    a_words = words(a)
-    t_words = words(t)
-
-    score += len(q_words.intersection(a_words)) * 300
-    score += len(q_words.intersection(t_words)) * 350
-
-    if a in q:
-        score += 1500
-
-    if t in q:
-        score += 1800
-
     if q == f"{a} {t}":
-        score += 5000
+        score += 100
+
+    q_words = set(words(q))
+    a_words = set(words(a))
+    t_words = set(words(t))
+
+    if a_words and a_words.issubset(q_words):
+        score += 40
+
+    if t_words and t_words.issubset(q_words):
+        score += 40
+
+    for word in q_words:
+        if word in a_words:
+            score += 8
+
+        if word in t_words:
+            score += 8
 
     return score
 
 
+# =========================
+# DEEZER
+# =========================
+
 def deezer_search(query):
     try:
-        print("DEEZER BUSQUEDA:", query)
-
         response = requests.get(
             "https://api.deezer.com/search",
             params={
                 "q": query,
                 "limit": 50
             },
-            timeout=25
+            timeout=20
         )
 
-        print("DEEZER STATUS:", response.status_code)
-
         if response.status_code != 200:
+            print(
+                "DEEZER ERROR:",
+                response.status_code,
+                response.text[:500]
+            )
             return []
 
         data = response.json()
@@ -159,219 +195,232 @@ def deezer_search(query):
             artist = artist_data.get("name", "")
             title = song.get("title", "")
             preview = song.get("preview", "")
+            link = song.get("link", "")
 
-            if not artist or not title:
-                continue
-
-            results.append({
+            result = {
                 "id": song.get("id"),
                 "artist": artist,
                 "title": title,
                 "preview": preview,
-                "link": song.get("link", ""),
+                "link": link,
                 "duration": song.get("duration", 0),
-                "score": score_result(query, artist, title)
-            })
+                "score": score_result(
+                    query,
+                    artist,
+                    title
+                )
+            }
+
+            results.append(result)
 
         return results
 
     except Exception as e:
-        print("ERROR DEEZER:", e)
+        print("DEEZER EXCEPTION:", repr(e))
         return []
 
+
+# =========================
+# BÚSQUEDA INTELIGENTE
+# =========================
 
 def search_music(query):
-    query_clean = normalize(query)
+    query = query.strip()
 
-    if not query_clean:
+    if not query:
         return []
 
-    all_results = []
+    results = []
 
-    # Busqueda completa
-    all_results.extend(deezer_search(query))
+    # Búsqueda completa
+    results.extend(
+        deezer_search(query)
+    )
 
-    query_words = query_clean.split()
+    query_words = words(query)
 
-    # Busquedas intentando detectar artista + titulo
+    # Intentar detectar artista + título
     if len(query_words) >= 2:
 
-        for artist_words_count in range(
-            min(3, len(query_words) - 1),
-            0,
-            -1
-        ):
+        # Buscar todas las combinaciones posibles
+        for split in range(1, len(query_words)):
+
             artist_part = " ".join(
-                query_words[:artist_words_count]
+                query_words[:split]
             )
 
             title_part = " ".join(
-                query_words[artist_words_count:]
+                query_words[split:]
             )
 
-            if not title_part:
+            if not artist_part or not title_part:
                 continue
 
-            artist_results = deezer_search(artist_part)
+            combined_queries = [
+                f'artist:"{artist_part}" track:"{title_part}"',
+                f'"{artist_part}" "{title_part}"',
+                f"{artist_part} {title_part}"
+            ]
 
-            for item in artist_results:
-                artist_normalized = normalize(item["artist"])
-                title_normalized = normalize(item["title"])
+            for search_query in combined_queries:
 
-                title_words = words(title_part)
-
-                matching_title_words = len(
-                    title_words.intersection(
-                        words(title_normalized)
-                    )
+                extra_results = deezer_search(
+                    search_query
                 )
 
-                artist_match = (
-                    artist_part in artist_normalized
-                    or artist_normalized in artist_part
+                results.extend(
+                    extra_results
                 )
-
-                if artist_match and matching_title_words > 0:
-                    item["score"] += 4000
-                    item["score"] += matching_title_words * 1000
-                    all_results.append(item)
 
     # Eliminar duplicados
     unique = {}
 
-    for item in all_results:
-        key = (
-            normalize(item["artist"]),
-            normalize(item["title"])
-        )
+    for item in results:
 
-        if key not in unique:
-            unique[key] = item
+        song_id = item.get("id")
+
+        if not song_id:
+            continue
+
+        if song_id not in unique:
+            unique[song_id] = item
+
         else:
-            if item["score"] > unique[key]["score"]:
-                unique[key] = item
+            # conservar la versión con mejor puntuación
+            if item.get("score", 0) > unique[song_id].get("score", 0):
+                unique[song_id] = item
 
     results = list(unique.values())
 
+    # Ordenar por puntuación
     results.sort(
-        key=lambda x: x["score"],
+        key=lambda x: x.get("score", 0),
         reverse=True
     )
 
     return results[:8]
 
 
+# =========================
+# MOSTRAR RESULTADOS
+# =========================
+
 def show_results(chat_id, query):
-    print("BUSQUEDA FINAL:", query)
+
+    send_message(
+        chat_id,
+        "🔎 Buscando música...\n\n"
+        f"Consulta: {query}"
+    )
 
     results = search_music(query)
 
-    print("CANTIDAD RESULTADOS:", len(results))
-
     if not results:
+
         send_message(
             chat_id,
-            "No encontre resultados.\n\n"
-            "Probá escribiendo:\n"
-            "Artista + cancion\n\n"
-            "Ejemplo:\n"
-            "Rodrigo Tapari Una cerveza"
+            "❌ No encontré resultados.\n\n"
+            "Probá escribiendo nuevamente "
+            "el artista y el título."
         )
+
         return
 
     SEARCH_RESULTS[chat_id] = results
 
+    # Guardar búsqueda
     if chat_id not in USER_SEARCHES:
         USER_SEARCHES[chat_id] = []
 
     if query not in USER_SEARCHES[chat_id]:
-        USER_SEARCHES[chat_id].insert(0, query)
+        USER_SEARCHES[chat_id].append(query)
 
-    USER_SEARCHES[chat_id] = USER_SEARCHES[chat_id][:10]
+    # Limitar historial
+    USER_SEARCHES[chat_id] = USER_SEARCHES[chat_id][-10:]
 
     buttons = []
 
     for index, item in enumerate(results):
-        label = f"{item['title']} - {item['artist']}"
 
-        buttons.append([
+        artist = item.get("artist", "")
+        title = item.get("title", "")
+
+        button_text = f"{artist} – {title}"
+
+        if len(button_text) > 60:
+            button_text = button_text[:57] + "..."
+
+        buttons.append(
+            [
+                {
+                    "text": button_text,
+                    "callback_data": f"song_{index}"
+                }
+            ]
+        )
+
+    buttons.append(
+        [
             {
-                "text": label[:60],
-                "callback_data": f"song_{index}"
+                "text": "🔎 Nueva búsqueda",
+                "callback_data": "new_search"
             }
-        ])
-
-    buttons.append([
-        {
-            "text": "Nueva busqueda",
-            "callback_data": "new_search"
-        }
-    ])
-
-    markup = {
-        "inline_keyboard": buttons
-    }
+        ]
+    )
 
     send_message(
         chat_id,
-        "RESULTADOS\n\nElegí una canción:",
-        markup
+        "🎵 Encontré estos resultados:\n\n"
+        "Elegí una canción:",
+        {
+            "inline_keyboard": buttons
+        }
     )
 
-def send_authorized_audio(chat_id, audio_file, title, artist):
-    try:
-        with open(audio_file, "rb") as audio:
 
-            result = telegram(
-                "sendAudio",
-                {
-                    "chat_id": chat_id,
-                    "audio": audio,
-                    "title": title,
-                    "performer": artist
-                }
-            )
-
-        print("AUTHORIZED AUDIO RESULT:", result)
-
-        return result
-
-    except Exception as e:
-        print("ERROR AUTHORIZED AUDIO:", e)
-        return {}
-
+# =========================
+# ENVIAR CANCIÓN / PREVIEW
+# =========================
 
 def send_song(chat_id, item):
+
     title = item.get("title", "")
     artist = item.get("artist", "")
     preview = item.get("preview", "")
 
     if not preview:
+
         send_message(
             chat_id,
             "Encontré la canción, pero no hay preview disponible."
         )
+
         return
 
     send_message(
         chat_id,
-        "Buscando preview de audio..."
+        "🎵 Buscando preview de audio..."
     )
 
     result = telegram(
-    "sendAudio",
-    {
-        "chat_id": chat_id,
-        "audio": preview,
-        "title": title,
-        "performer": artist,
-        "caption": "Preview de 30 segundos"
-    }
-)
+        "sendAudio",
+        {
+            "chat_id": chat_id,
+            "audio": preview,
+            "title": title,
+            "performer": artist,
+            "caption": "Preview de 30 segundos"
+        }
+    )
 
-link = item.get("link", "")
+    print("AUDIO RESULT:", result)
+
+    # Botón para escuchar la canción completa
+    # directamente en Deezer
+    link = item.get("link", "")
 
     if link:
+
         send_message(
             chat_id,
             "🎵 Escuchá la canción completa:",
@@ -387,35 +436,51 @@ link = item.get("link", "")
             }
         )
 
-
     if not result.get("ok"):
+
         send_message(
             chat_id,
-            "No pude enviar el audio."
+            "❌ No pude enviar el preview de audio."
         )
 
 
+# =========================
+# PÁGINA PRINCIPAL
+# =========================
+
 @app.route("/", methods=["GET"])
 def home():
+
     return "InfoZonal Music Bot OK"
 
+
+# =========================
+# WEBHOOK TELEGRAM
+# =========================
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
 
     try:
+
         update = request.get_json(
             silent=True
         ) or {}
 
-        print("UPDATE RECIBIDO")
+        print(
+            "UPDATE RECIBIDO:",
+            update
+        )
 
-        if "message" in update:
+        # =====================
+        # MENSAJES NORMALES
+        # =====================
 
-            message = update["message"]
+        message = update.get("message")
 
-            chat = message.get("chat", {})
+        if message:
 
+            chat = message.get("chat") or {}
             chat_id = chat.get("id")
 
             text = message.get("text", "")
@@ -425,11 +490,12 @@ def webhook():
 
             text = text.strip()
 
+            # /start
             if text == "/start":
 
                 send_message(
                     chat_id,
-                    "InfoZonal Music\n\n"
+                    "🎵 InfoZonal Music\n\n"
                     "Buscá una canción escribiendo "
                     "el artista y el título.\n\n"
                     "Ejemplos:\n"
@@ -442,18 +508,28 @@ def webhook():
 
                 return "OK"
 
-            if text in ("Buscar musica", "🔎 Buscar música"):
+            # Buscar música
+            if text in (
+                "Buscar musica",
+                "Buscar música",
+                "🔎 Buscar música"
+            ):
 
                 send_message(
                     chat_id,
-                    "Escribí el artista y la canción.\n\n"
+                    "🔎 Escribí el artista y la canción.\n\n"
                     "Ejemplo:\n"
                     "Rodrigo Tapari Una cerveza"
                 )
 
                 return "OK"
 
-            if text in ("Mis busquedas", "🎧 Mis búsquedas"):
+            # Mis búsquedas
+            if text in (
+                "Mis busquedas",
+                "Mis búsquedas",
+                "🎧 Mis búsquedas"
+            ):
 
                 searches = USER_SEARCHES.get(
                     chat_id,
@@ -464,109 +540,158 @@ def webhook():
 
                     send_message(
                         chat_id,
-                        "Todavía no tenés búsquedas."
+                        "🎧 Todavía no tenés búsquedas guardadas."
                     )
 
-                else:
+                    return "OK"
 
-                    message_text = "Tus búsquedas:\n\n"
+                buttons = []
 
-                    for index, search in enumerate(
-                        searches,
-                        1
-                    ):
-                        message_text += (
-                            f"{index}. {search}\n"
-                        )
+                for index, search in enumerate(
+                    reversed(searches)
+                ):
 
-                    send_message(
-                        chat_id,
-                        message_text
+                    buttons.append(
+                        [
+                            {
+                                "text": f"🔎 {search}",
+                                "callback_data": f"history_{search}"
+                            }
+                        ]
                     )
-
-                return "OK"
-
-            if text in ("Ayuda", "ℹ️ Ayuda"):
 
                 send_message(
                     chat_id,
-                    "Cómo buscar:\n\n"
-                    "Artista\n"
-                    "Artista + canción\n"
-                    "Título de canción"
+                    "🎧 Tus últimas búsquedas:",
+                    {
+                        "inline_keyboard": buttons
+                    }
                 )
 
                 return "OK"
 
-            if text in ("InfoZonal", "📢 InfoZonal"):
+            # Ayuda
+            if text in (
+                "Ayuda",
+                "❓ Ayuda"
+            ):
 
                 send_message(
                     chat_id,
-                    "InfoZonal\n\n"
-                    "Noticias de San Andrés de Giles y zona."
+                    "❓ AYUDA\n\n"
+                    "Para buscar música escribí:\n\n"
+                    "Artista + canción\n\n"
+                    "Ejemplo:\n"
+                    "Rodrigo Tapari Una cerveza\n\n"
+                    "El bot mostrará los resultados "
+                    "disponibles y un preview de 30 segundos."
                 )
 
                 return "OK"
 
-            if text:
+            # InfoZonal
+            if text in (
+                "InfoZonal",
+                "ℹ️ InfoZonal"
+            ):
 
-                show_results(
+                send_message(
                     chat_id,
-                    text
+                    "📡 InfoZonal\n\n"
+                    "Noticias, información y actualidad "
+                    "de San Andrés de Giles y zona.\n\n"
+                    "San Andrés de Giles y zona."
                 )
 
                 return "OK"
 
-        if "callback_query" in update:
+            # Si escribió cualquier otra cosa,
+            # se interpreta como búsqueda
+            show_results(
+                chat_id,
+                text
+            )
 
-            callback = update["callback_query"]
+            return "OK"
 
-            callback_id = callback.get("id")
+        # =====================
+        # BOTONES INLINE
+        # =====================
 
-            data = callback.get(
+        callback = update.get(
+            "callback_query"
+        )
+
+        if callback:
+
+            callback_id = callback.get(
+                "id"
+            )
+
+            callback_data = callback.get(
                 "data",
                 ""
             )
 
-            message = callback.get(
-                "message",
-                {}
-            )
+            callback_message = callback.get(
+                "message"
+            ) or {}
 
-            chat = message.get(
-                "chat",
-                {}
-            )
+            callback_chat = callback_message.get(
+                "chat"
+            ) or {}
 
-            chat_id = chat.get(
+            chat_id = callback_chat.get(
                 "id"
             )
 
-            if callback_id:
-                answer_callback(
-                    callback_id
-                )
+            answer_callback(
+                callback_id
+            )
 
-            if data == "new_search":
+            # Nueva búsqueda
+            if callback_data == "new_search":
 
                 send_message(
                     chat_id,
-                    "Escribí el artista o la canción."
+                    "🔎 Escribí el artista y la canción.\n\n"
+                    "Ejemplo:\n"
+                    "Rodrigo Tapari Una cerveza"
                 )
 
                 return "OK"
 
-            if data.startswith("song_"):
+            # Búsqueda del historial
+            if callback_data.startswith(
+                "history_"
+            ):
+
+                query = callback_data[
+                    len("history_"):
+                ]
+
+                show_results(
+                    chat_id,
+                    query
+                )
+
+                return "OK"
+
+            # Selección de canción
+            if callback_data.startswith(
+                "song_"
+            ):
 
                 try:
+
                     index = int(
-                        data.replace(
-                            "song_",
-                            ""
-                        )
+                        callback_data[
+                            len("song_"):
+                        ]
                     )
 
-                except Exception:
+                except ValueError:
+
                     return "OK"
 
                 results = SEARCH_RESULTS.get(
@@ -578,15 +703,16 @@ def webhook():
 
                     send_message(
                         chat_id,
-                        "La búsqueda venció. "
-                        "Buscá nuevamente."
+                        "❌ Ese resultado ya no está disponible."
                     )
 
                     return "OK"
 
+                item = results[index]
+
                 send_song(
                     chat_id,
-                    results[index]
+                    item
                 )
 
                 return "OK"
@@ -596,11 +722,15 @@ def webhook():
     except Exception as e:
 
         print(
-            "ERROR WEBHOOK:",
-            e
+            "WEBHOOK ERROR:",
+            repr(e)
         )
 
         return "OK"
 
+
+# =========================
+# WSGI
+# =========================
 
 application = app
