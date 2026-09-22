@@ -5,8 +5,8 @@ import requests
 from flask import Flask, request
 from music_database import conectar
 from music_database import crear_base
-app = Flask(__name__)
 
+app = Flask(__name__)
 
 crear_base()
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
