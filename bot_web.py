@@ -317,6 +317,28 @@ def show_results(chat_id, query):
         markup
     )
 
+def send_authorized_audio(chat_id, audio_file, title, artist):
+    try:
+        with open(audio_file, "rb") as audio:
+
+            result = telegram(
+                "sendAudio",
+                {
+                    "chat_id": chat_id,
+                    "audio": audio,
+                    "title": title,
+                    "performer": artist
+                }
+            )
+
+        print("AUTHORIZED AUDIO RESULT:", result)
+
+        return result
+
+    except Exception as e:
+        print("ERROR AUTHORIZED AUDIO:", e)
+        return {}
+
 
 def send_song(chat_id, item):
     title = item.get("title", "")
