@@ -397,7 +397,26 @@ def send_song(chat_id, item):
     title = item.get("title", "")
     artist = item.get("artist", "")
     preview = item.get("preview", "")
+title = item.get("title", "")
+artist = item.get("artist", "")
+preview = item.get("preview", "")
 
+guardada = buscar_cancion(artist, title)
+
+if guardada:
+    file_id, duracion = guardada
+
+    telegram(
+        "sendAudio",
+        {
+            "chat_id": chat_id,
+            "audio": file_id,
+            "title": title,
+            "performer": artist
+        }
+    )
+
+    return
     if not preview:
 
         send_message(
