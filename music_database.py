@@ -14,6 +14,7 @@ SUPABASE_KEY = os.environ.get(
 
 
 def encabezados():
+
     return {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -22,12 +23,20 @@ def encabezados():
 
 
 def crear_base():
-    # La tabla ya fue creada directamente en Supabase.
-    # No hace falta crearla desde el bot.
+
+    # Las tablas ya fueron creadas directamente
+    # en Supabase.
     pass
 
 
-def buscar_cancion(artista, titulo):
+# =========================================================
+# CANCIONES
+# =========================================================
+
+def buscar_cancion(
+    artista,
+    titulo
+):
 
     try:
 
@@ -119,8 +128,107 @@ def guardar_cancion(
     except Exception as e:
 
         print(
-            "ERROR GUARDANDO EN SUPABASE:",
+            "ERROR GUARDANDO CANCION:",
             repr(e)
         )
 
         return False
+
+
+# =========================================================
+# BUSQUEDAS
+# =========================================================
+
+def guardar_busqueda(
+    chat_id,
+    busqueda
+):
+
+    try:
+
+        url = (
+            f"{SUPABASE_URL}/rest/v1/busquedas"
+        )
+
+        datos = {
+            "chat_id": str(chat_id),
+            "busqueda": busqueda
+        }
+
+        respuesta = requests.post(
+            url,
+            headers={
+                **encabezados(),
+                "Prefer": "return=minimal"
+            },
+            json=datos,
+            timeout=15
+        )
+
+        print(
+            "SUPABASE GUARDAR BUSQUEDA:",
+            respuesta.status_code,
+            respuesta.text
+        )
+
+        return respuesta.status_code in (
+            200,
+            201
+        )
+
+    except Exception as e:
+
+        print(
+            "ERROR GUARDANDO BUSQUEDA:",
+            repr(e)
+        )
+
+        return False
+
+
+def buscar_ultima_busqueda(
+    chat_id
+):
+
+    try:
+
+        url = (
+            f"{SUPABASE_URL}/rest/v1/busquedas"
+            f"?chat_id=eq.{requests.utils.quote(str(chat_id))}"
+            f"&select=busqueda,fecha"
+            f"&order=id.desc"
+            f"&limit=1"
+        )
+
+        respuesta = requests.get(
+            url,
+            headers=encabezados(),
+            timeout=15
+        )
+
+        print(
+            "SUPABASE ULTIMA BUSQUEDA:",
+            respuesta.status_code,
+            respuesta.text
+        )
+
+        if respuesta.status_code != 200:
+            return None
+
+        datos = respuesta.json()
+
+        if not datos:
+            return None
+
+        return datos[0].get(
+            "busqueda"
+        )
+
+    except Exception as e:
+
+        print(
+            "ERROR BUSCANDO ULTIMA BUSQUEDA:",
+            repr(e)
+        )
+
+        return None
