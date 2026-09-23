@@ -105,7 +105,7 @@ def answer_callback(callback_id):
 
 
 # =========================================================
-# MENU
+# MENU PRINCIPAL
 # =========================================================
 
 def main_menu(chat_id):
@@ -178,6 +178,10 @@ def words(text):
     )
 
 
+# =========================================================
+# PUNTUACION DE RESULTADOS
+# =========================================================
+
 def score_result(
     item,
     search_text
@@ -223,6 +227,24 @@ def score_result(
 
     if query_normalizada in texto_normalizado:
         score += 5
+
+    # Priorizar coincidencia exacta de artista
+    artista_normalizado = normalize(
+        artista
+    )
+
+    if artista_normalizado:
+        if artista_normalizado in query_normalizada:
+            score += 3
+
+    # Priorizar coincidencia exacta del título
+    titulo_normalizado = normalize(
+        titulo
+    )
+
+    if titulo_normalizado:
+        if titulo_normalizado in query_normalizada:
+            score += 3
 
     return score
 
@@ -322,6 +344,10 @@ def search_music(query):
         query
     )
 
+    # =====================================================
+    # ORDENAR POR MEJOR COINCIDENCIA
+    # =====================================================
+
     resultados.sort(
         key=lambda item:
         score_result(
@@ -331,7 +357,60 @@ def search_music(query):
         reverse=True
     )
 
-    return resultados[:8]
+    # =====================================================
+    # ELIMINAR DUPLICADOS
+    # =====================================================
+
+    unicas = []
+
+    vistas = set()
+
+    for item in resultados:
+
+        artista = normalize(
+            item.get(
+                "artist",
+                ""
+            )
+        )
+
+        titulo = normalize(
+            item.get(
+                "title",
+                ""
+            )
+        )
+
+        clave = (
+            artista,
+            titulo
+        )
+
+        # Si ya apareció la misma canción,
+        # no la mostramos nuevamente.
+        if clave in vistas:
+
+            continue
+
+        vistas.add(
+            clave
+        )
+
+        unicas.append(
+            item
+        )
+
+        # Máximo 8 canciones diferentes
+        if len(unicas) >= 8:
+
+            break
+
+    print(
+        "RESULTADOS UNICOS:",
+        len(unicas)
+    )
+
+    return unicas
 
 
 # =========================================================
