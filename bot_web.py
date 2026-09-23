@@ -10,6 +10,9 @@ from music_database import buscar_cancion
 from music_database import guardar_cancion
 from music_database import guardar_busqueda
 from music_database import buscar_ultima_busqueda
+from music_database import buscar_archivo_autorizado
+from music_database import guardar_archivo_autorizado
+from music_database import actualizar_file_id_autorizado
 
 
 app = Flask(__name__)
@@ -21,11 +24,18 @@ BOT_TOKEN = os.environ.get(
     ""
 ).strip()
 
+ADMIN_CHAT_ID = os.environ.get(
+    "ADMIN_CHAT_ID",
+    ""
+).strip()
+
 TELEGRAM_API = (
     f"https://api.telegram.org/bot{BOT_TOKEN}"
 )
 
 SEARCH_RESULTS = {}
+
+CARGAS = {}
 
 
 # =========================================================
@@ -509,7 +519,6 @@ def search_music(query):
             item
         )
 
-        # Máximo 5 resultados
         if len(unicas) >= 5:
             break
 
@@ -627,6 +636,52 @@ def send_song(
         0
     )
 
+    # Primero buscamos un archivo autorizado completo
+    autorizado = buscar_archivo_autorizado(
+        artist,
+        title
+    )
+
+    if autorizado:
+
+        file_id_autorizado = autorizado.get(
+            "file_id"
+        )
+
+        if file_id_autorizado:
+
+            print(
+                "ARCHIVO AUTORIZADO ENCONTRADO:",
+                artist,
+                "-",
+                title
+            )
+
+            resultado = telegram(
+                "sendAudio",
+                {
+                    "chat_id": chat_id,
+                    "audio": file_id_autorizado,
+                    "title": title,
+                    "performer": artist
+                }
+            )
+
+            print(
+                "AUDIO AUTORIZADO RESULT:",
+                resultado
+            )
+
+            if resultado.get("ok"):
+
+                send_message(
+                    chat_id,
+                    "📥 Audio completo enviado."
+                )
+
+                return
+
+    # Después buscamos el cache normal del preview
     guardada = buscar_cancion(
         artist,
         title
@@ -784,6 +839,255 @@ def send_song(
 
 
 # =========================================================
+# CARGA DE ARCHIVOS AUTORIZADOS
+# =========================================================
+
+def es_administrador(chat_id):
+
+    if not ADMIN_CHAT_ID:
+        return False
+
+    return str(chat_id) == str(
+        ADMIN_CHAT_ID
+    )
+
+
+def iniciar_carga(chat_id):
+
+    if not es_administrador(chat_id):
+
+        send_message(
+            chat_id,
+            "❌ Esta función es solamente para el administrador."
+        )
+
+        return
+
+    CARGAS[
+        chat_id
+    ] = {
+        "paso": "artista"
+    }
+
+    send_message(
+        chat_id,
+        "📥 Cargar archivo autorizado\n\n"
+        "Escribí el nombre del artista."
+    )
+
+
+def procesar_carga_texto(
+    chat_id,
+    text
+):
+
+    estado = CARGAS.get(
+        chat_id
+    )
+
+    if not estado:
+        return False
+
+    if not es_administrador(chat_id):
+
+        CARGAS.pop(
+            chat_id,
+            None
+        )
+
+        return False
+
+    paso = estado.get(
+        "paso"
+    )
+
+    if paso == "artista":
+
+        estado[
+            "artista"
+        ] = text.strip()
+
+        estado[
+            "paso"
+        ] = "titulo"
+
+        send_message(
+            chat_id,
+            "🎵 Ahora escribí el título de la canción."
+        )
+
+        return True
+
+    if paso == "titulo":
+
+        estado[
+            "titulo"
+        ] = text.strip()
+
+        estado[
+            "paso"
+        ] = "archivo"
+
+        send_message(
+            chat_id,
+            "📁 Ahora enviame el archivo de audio completo.\n\n"
+            "Debe ser un archivo que tengas autorización para distribuir."
+        )
+
+        return True
+
+    return False
+
+
+def procesar_archivo_audio(
+    chat_id,
+    message
+):
+
+    estado = CARGAS.get(
+        chat_id
+    )
+
+    if not estado:
+        return False
+
+    if not es_administrador(chat_id):
+
+        CARGAS.pop(
+            chat_id,
+            None
+        )
+
+        return False
+
+    audio = message.get(
+        "audio"
+    )
+
+    document = message.get(
+        "document"
+    )
+
+    if audio:
+
+        file_id = audio.get(
+            "file_id"
+        )
+
+        duration = audio.get(
+            "duration",
+            0
+        )
+
+    elif document:
+
+        mime_type = document.get(
+            "mime_type",
+            ""
+        )
+
+        if not mime_type.startswith(
+            "audio/"
+        ):
+
+            send_message(
+                chat_id,
+                "❌ Ese archivo no parece ser un audio.\n\n"
+                "Enviame un archivo de audio."
+            )
+
+            return True
+
+        file_id = document.get(
+            "file_id"
+        )
+
+        duration = 0
+
+    else:
+
+        return False
+
+    if not file_id:
+
+        send_message(
+            chat_id,
+            "❌ Telegram no entregó el identificador del archivo."
+        )
+
+        return True
+
+    artista = estado.get(
+        "artista",
+        ""
+    )
+
+    titulo = estado.get(
+        "titulo",
+        ""
+    )
+
+    if not artista or not titulo:
+
+        send_message(
+            chat_id,
+            "❌ Faltan datos del archivo."
+        )
+
+        CARGAS.pop(
+            chat_id,
+            None
+        )
+
+        return True
+
+    archivo_url = (
+        f"telegram://{file_id}"
+    )
+
+    guardado = guardar_archivo_autorizado(
+        artista,
+        titulo,
+        archivo_url,
+        file_id,
+        duration
+    )
+
+    print(
+        "ARCHIVO AUTORIZADO GUARDADO:",
+        guardado,
+        artista,
+        "-",
+        titulo
+    )
+
+    CARGAS.pop(
+        chat_id,
+        None
+    )
+
+    if guardado:
+
+        send_message(
+            chat_id,
+            "✅ Archivo autorizado guardado correctamente.\n\n"
+            f"🎤 Artista: {artista}\n"
+            f"🎵 Título: {titulo}\n\n"
+            "Ahora el bot podrá entregar este audio completo "
+            "cuando alguien busque esa canción."
+        )
+
+    else:
+
+        send_message(
+            chat_id,
+            "❌ No pude guardar el archivo en Supabase."
+        )
+
+    return True
+
+
+# =========================================================
 # PAGINA PRINCIPAL
 # =========================================================
 
@@ -799,241 +1103,3 @@ def home():
 # =========================================================
 # WEBHOOK
 # =========================================================
-
-@app.route(
-    "/webhook",
-    methods=["POST"]
-)
-def webhook():
-
-    try:
-
-        update = request.get_json(
-            silent=True
-        ) or {}
-
-        print(
-            "UPDATE RECIBIDO:",
-            update
-        )
-
-        # =================================================
-        # CALLBACK
-        # =================================================
-
-        if "callback_query" in update:
-
-            callback = update[
-                "callback_query"
-            ]
-
-            callback_id = callback.get(
-                "id"
-            )
-
-            data = callback.get(
-                "data",
-                ""
-            )
-
-            message = callback.get(
-                "message",
-                {}
-            )
-
-            chat = message.get(
-                "chat",
-                {}
-            )
-
-            chat_id = chat.get(
-                "id"
-            )
-
-            answer_callback(
-                callback_id
-            )
-
-            if data.startswith(
-                "song_"
-            ):
-
-                try:
-
-                    index = int(
-                        data.split(
-                            "_"
-                        )[1]
-                    )
-
-                    resultados = SEARCH_RESULTS.get(
-                        chat_id,
-                        []
-                    )
-
-                    if (
-                        0 <= index <
-                        len(resultados)
-                    ):
-
-                        item = resultados[
-                            index
-                        ]
-
-                        send_song(
-                            chat_id,
-                            item
-                        )
-
-                except Exception as e:
-
-                    print(
-                        "ERROR CALLBACK SONG:",
-                        repr(e)
-                    )
-
-                return "OK", 200
-
-            if data == "new_search":
-
-                send_message(
-                    chat_id,
-                    "🔎 Escribí el artista y el título de la canción."
-                )
-
-                return "OK", 200
-
-            return "OK", 200
-
-        # =================================================
-        # MENSAJE
-        # =================================================
-
-        message = update.get(
-            "message"
-        )
-
-        if not message:
-
-            return "OK", 200
-
-        chat = message.get(
-            "chat",
-            {}
-        )
-
-        chat_id = chat.get(
-            "id"
-        )
-
-        text = message.get(
-            "text",
-            ""
-        ).strip()
-
-        if not chat_id:
-
-            return "OK", 200
-
-        # =================================================
-        # START
-        # =================================================
-
-        if text == "/start":
-
-            main_menu(
-                chat_id
-            )
-
-            return "OK", 200
-
-        # =================================================
-        # BUSCAR MUSICA
-        # =================================================
-
-        if text == "🔎 Buscar música":
-
-            send_message(
-                chat_id,
-                "🔎 Escribí el artista y el título de la canción.\n\n"
-                "Ejemplo:\n"
-                "Rodrigo Tapari Una cerveza"
-            )
-
-            return "OK", 200
-
-        # =================================================
-        # MIS BUSQUEDAS
-        # =================================================
-
-        if text == "🎧 Mis búsquedas":
-
-            ultima = buscar_ultima_busqueda(
-                chat_id
-            )
-
-            if ultima:
-
-                send_message(
-                    chat_id,
-                    f"🎧 Última búsqueda:\n\n{ultima}"
-                )
-
-                resultados = search_music(
-                    ultima
-                )
-
-                show_results(
-                    chat_id,
-                    ultima,
-                    resultados
-                )
-
-            else:
-
-                send_message(
-                    chat_id,
-                    "🎧 Todavía no tenés búsquedas."
-                )
-
-            return "OK", 200
-
-        # =================================================
-        # INFOZONAL
-        # =================================================
-
-        if text == "ℹ️ InfoZonal":
-
-            send_message(
-                chat_id,
-                "📰 InfoZonal\n\n"
-                "Noticias de San Andrés de Giles y zona."
-            )
-
-            return "OK", 200
-
-        # =================================================
-        # AYUDA
-        # =================================================
-
-        if text == "❓ Ayuda":
-
-            send_message(
-                chat_id,
-                "❓ Ayuda\n\n"
-                "Escribí el nombre del artista "
-                "y la canción que querés buscar.\n\n"
-                "Ejemplo:\n"
-                "Rodrigo Tapari Una cerveza"
-            )
-
-            return "OK", 200
-
-        # =================================================
-        # BUSQUEDA NORMAL
-        # =================================================
-
-        if text:
-
-            # Guardar búsqueda en Supabase
-            guardada = gua
