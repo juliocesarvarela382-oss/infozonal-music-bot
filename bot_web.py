@@ -16,9 +16,7 @@ crear_base()
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 
-TELEGRAM_API = (
-    f"https://api.telegram.org/bot{BOT_TOKEN}"
-)
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 SEARCH_RESULTS = {}
 USER_SEARCHES = {}
@@ -70,11 +68,7 @@ def telegram(method, data=None):
         }
 
 
-def send_message(
-    chat_id,
-    text,
-    reply_markup=None
-):
+def send_message(chat_id, text, reply_markup=None):
 
     data = {
         "chat_id": chat_id,
@@ -153,7 +147,7 @@ def main_menu(chat_id):
 
 def normalize(text):
 
-    text = text.lower().strip()
+    text = str(text or "").lower().strip()
 
     text = re.sub(
         r"[^\w\sáéíóúüñ]",
@@ -168,7 +162,7 @@ def normalize(text):
         text
     )
 
-    return text
+    return text.strip()
 
 
 def words(text):
@@ -179,12 +173,53 @@ def words(text):
 
 
 # =========================================================
-# PUNTUACION DE RESULTADOS
+# DETECTAR ARTISTA
+# =========================================================
+
+def artist_matches(
+    artista,
+    artista_objetivo
+):
+
+    artista = normalize(artista)
+    artista_objetivo = normalize(artista_objetivo)
+
+    if not artista or not artista_objetivo:
+        return False
+
+    if artista == artista_objetivo:
+        return True
+
+    if artista_objetivo in artista:
+        return True
+
+    if artista in artista_objetivo:
+        return True
+
+    palabras_artista = words(artista)
+    palabras_objetivo = words(artista_objetivo)
+
+    if not palabras_artista or not palabras_objetivo:
+        return False
+
+    coincidencias = (
+        palabras_artista &
+        palabras_objetivo
+    )
+
+    return len(coincidencias) >= len(
+        palabras_objetivo
+    )
+
+
+# =========================================================
+# PUNTUACION
 # =========================================================
 
 def score_result(
     item,
-    search_text
+    search_text,
+    artista_objetivo=None
 ):
 
     titulo = item.get(
@@ -225,26 +260,40 @@ def score_result(
         f"{artista} {titulo}"
     )
 
+    if query_normalizada == texto_normalizado:
+        score += 20
+
     if query_normalizada in texto_normalizado:
         score += 5
 
-    # Priorizar coincidencia exacta de artista
     artista_normalizado = normalize(
         artista
     )
 
-    if artista_normalizado:
-        if artista_normalizado in query_normalizada:
-            score += 3
-
-    # Priorizar coincidencia exacta del título
     titulo_normalizado = normalize(
         titulo
     )
 
+    if artista_normalizado:
+
+        if artista_normalizado in query_normalizada:
+            score += 10
+
+        if artista_objetivo:
+
+            if artist_matches(
+                artista,
+                artista_objetivo
+            ):
+                score += 20
+
+            else:
+                score -= 20
+
     if titulo_normalizado:
+
         if titulo_normalizado in query_normalizada:
-            score += 3
+            score += 10
 
     return score
 
@@ -261,7 +310,7 @@ def deezer_search(query):
             "https://api.deezer.com/search",
             params={
                 "q": query,
-                "limit": 10
+                "limit": 25
             },
             timeout=20
         )
@@ -338,17 +387,28 @@ def deezer_search(query):
         return []
 
 
+# =========================================================
+# BUSQUEDA INTELIGENTE
+# =========================================================
+
 def search_music(query):
 
     resultados = deezer_search(
         query
     )
 
-    # =====================================================
-    # ORDENAR POR MEJOR COINCIDENCIA
-    # =====================================================
+    if not resultados:
+        return []
 
-    resultados.sort(
+    # -----------------------------------------------------
+    # Primero identificamos el artista principal.
+    #
+    # Para eso usamos el artista del resultado con mejor
+    # coincidencia inicial.
+    # -----------------------------------------------------
+
+    resultados_iniciales = sorted(
+        resultados,
         key=lambda item:
         score_result(
             item,
@@ -357,15 +417,75 @@ def search_music(query):
         reverse=True
     )
 
-    # =====================================================
-    # ELIMINAR DUPLICADOS
-    # =====================================================
+    artista_objetivo = ""
+
+    if resultados_iniciales:
+
+        artista_objetivo = resultados_iniciales[0].get(
+            "artist",
+            ""
+        )
+
+    print(
+        "ARTISTA DETECTADO:",
+        artista_objetivo
+    )
+
+    # -----------------------------------------------------
+    # Ordenar todos los resultados.
+    # -----------------------------------------------------
+
+    resultados.sort(
+        key=lambda item:
+        score_result(
+            item,
+            query,
+            artista_objetivo
+        ),
+        reverse=True
+    )
+
+    # -----------------------------------------------------
+    # Si detectamos un artista claro, eliminamos resultados
+    # de otros artistas.
+    # -----------------------------------------------------
+
+    filtrados = []
+
+    for item in resultados:
+
+        artista = item.get(
+            "artist",
+            ""
+        )
+
+        if artist_matches(
+            artista,
+            artista_objetivo
+        ):
+
+            filtrados.append(
+                item
+            )
+
+    # -----------------------------------------------------
+    # Si el filtro dejó muy pocos resultados, usamos los
+    # resultados originales para no dejar una búsqueda vacía.
+    # -----------------------------------------------------
+
+    if len(filtrados) < 1:
+
+        filtrados = resultados
+
+    # -----------------------------------------------------
+    # Eliminar duplicados exactos de artista + título.
+    # -----------------------------------------------------
 
     unicas = []
 
     vistas = set()
 
-    for item in resultados:
+    for item in filtrados:
 
         artista = normalize(
             item.get(
@@ -386,10 +506,7 @@ def search_music(query):
             titulo
         )
 
-        # Si ya apareció la misma canción,
-        # no la mostramos nuevamente.
         if clave in vistas:
-
             continue
 
         vistas.add(
@@ -400,15 +517,27 @@ def search_music(query):
             item
         )
 
-        # Máximo 8 canciones diferentes
+        # SIEMPRE máximo 8 resultados
         if len(unicas) >= 8:
-
             break
 
     print(
-        "RESULTADOS UNICOS:",
+        "RESULTADOS FINALES:",
         len(unicas)
     )
+
+    for numero, item in enumerate(
+        unicas,
+        start=1
+    ):
+
+        print(
+            numero,
+            "-",
+            item.get("artist"),
+            "-",
+            item.get("title")
+        )
 
     return unicas
 
@@ -869,112 +998,10 @@ def webhook():
                 "🔎 Escribí el artista y el título de la canción.\n\n"
                 "Ejemplo:\n"
                 "Rodrigo Tapari Una cerveza"
-            )
+            
 
-            return "OK", 200
-
-        # =================================================
-        # MIS BUSQUEDAS
-        # =================================================
-
-        if text == "🎧 Mis búsquedas":
-
-            ultima = USER_SEARCHES.get(
-                chat_id
-            )
-
-            if ultima:
-
-                send_message(
-                    chat_id,
-                    f"🎧 Última búsqueda:\n\n{ultima}"
-                )
-
-                resultados = search_music(
-                    ultima
-                )
-
-                show_results(
-                    chat_id,
-                    ultima,
-                    resultados
-                )
-
-            else:
-
-                send_message(
-                    chat_id,
-                    "🎧 Todavía no tenés búsquedas."
-                )
-
-            return "OK", 200
-
-        # =================================================
-        # INFOZONAL
-        # =================================================
-
-        if text == "ℹ️ InfoZonal":
-
-            send_message(
-                chat_id,
-                "📰 InfoZonal\n\n"
-                "Noticias de San Andrés de Giles y zona."
-            )
-
-            return "OK", 200
-
-        # =================================================
-        # AYUDA
-        # =================================================
-
-        if text == "❓ Ayuda":
-
-            send_message(
-                chat_id,
-                "❓ Ayuda\n\n"
-                "Escribí el nombre del artista "
-                "y la canción que querés buscar.\n\n"
-                "Ejemplo:\n"
-                "Rodrigo Tapari Una cerveza"
-            )
-
-            return "OK", 200
-
-        # =================================================
-        # BUSQUEDA NORMAL
-        # =================================================
-
-        if text:
-
-            send_message(
-                chat_id,
-                "🔎 Buscando música..."
-            )
-
-            resultados = search_music(
-                text
-            )
-
-            show_results(
-                chat_id,
-                text,
-                resultados
-            )
-
-        return "OK", 200
-
-    except Exception as e:
-
-        print(
-            "ERROR WEBHOOK:",
-            repr(e)
-        )
-
-        return "OK", 200
-
-
-# =========================================================
-# GUNICORN
-# =========================================================
-
-application = app
+        
+            
+            
+            
+                    
