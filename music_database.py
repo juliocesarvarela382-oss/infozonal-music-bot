@@ -14,7 +14,6 @@ SUPABASE_KEY = os.environ.get(
 
 
 def encabezados():
-
     return {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -23,20 +22,15 @@ def encabezados():
 
 
 def crear_base():
-
-    # Las tablas ya fueron creadas directamente
-    # en Supabase.
+    # Las tablas ya fueron creadas directamente en Supabase.
     pass
 
 
-# =========================================================
-# CANCIONES
-# =========================================================
+# ============================================================
+# CANCIONES / CACHE DE TELEGRAM
+# ============================================================
 
-def buscar_cancion(
-    artista,
-    titulo
-):
+def buscar_cancion(artista, titulo):
 
     try:
 
@@ -135,9 +129,9 @@ def guardar_cancion(
         return False
 
 
-# =========================================================
+# ============================================================
 # BUSQUEDAS
-# =========================================================
+# ============================================================
 
 def guardar_busqueda(
     chat_id,
@@ -232,3 +226,157 @@ def buscar_ultima_busqueda(
         )
 
         return None
+
+
+# ============================================================
+# ARCHIVOS AUTORIZADOS
+# ============================================================
+
+def buscar_archivo_autorizado(
+    artista,
+    titulo
+):
+
+    try:
+
+        url = (
+            f"{SUPABASE_URL}/rest/v1/archivos_autorizados"
+            f"?artista=eq.{requests.utils.quote(artista)}"
+            f"&titulo=eq.{requests.utils.quote(titulo)}"
+            f"&select=id,artista,titulo,archivo_url,file_id,duracion"
+            f"&order=id.desc"
+            f"&limit=1"
+        )
+
+        respuesta = requests.get(
+            url,
+            headers=encabezados(),
+            timeout=15
+        )
+
+        print(
+            "SUPABASE BUSCAR ARCHIVO AUTORIZADO:",
+            respuesta.status_code,
+            respuesta.text
+        )
+
+        if respuesta.status_code != 200:
+            return None
+
+        datos = respuesta.json()
+
+        if not datos:
+            return None
+
+        return datos[0]
+
+    except Exception as e:
+
+        print(
+            "ERROR BUSCANDO ARCHIVO AUTORIZADO:",
+            repr(e)
+        )
+
+        return None
+
+
+def guardar_archivo_autorizado(
+    artista,
+    titulo,
+    archivo_url,
+    file_id=None,
+    duracion=0
+):
+
+    try:
+
+        url = (
+            f"{SUPABASE_URL}/rest/v1/archivos_autorizados"
+        )
+
+        datos = {
+            "artista": artista,
+            "titulo": titulo,
+            "archivo_url": archivo_url,
+            "file_id": file_id,
+            "duracion": duracion or 0
+        }
+
+        respuesta = requests.post(
+            url,
+            headers={
+                **encabezados(),
+                "Prefer": "return=minimal"
+            },
+            json=datos,
+            timeout=15
+        )
+
+        print(
+            "SUPABASE GUARDAR ARCHIVO AUTORIZADO:",
+            respuesta.status_code,
+            respuesta.text
+        )
+
+        return respuesta.status_code in (
+            200,
+            201
+        )
+
+    except Exception as e:
+
+        print(
+            "ERROR GUARDANDO ARCHIVO AUTORIZADO:",
+            repr(e)
+        )
+
+        return False
+
+
+def actualizar_file_id_autorizado(
+    registro_id,
+    file_id,
+    duracion=0
+):
+
+    try:
+
+        url = (
+            f"{SUPABASE_URL}/rest/v1/archivos_autorizados"
+            f"?id=eq.{registro_id}"
+        )
+
+        datos = {
+            "file_id": file_id,
+            "duracion": duracion or 0
+        }
+
+        respuesta = requests.patch(
+            url,
+            headers={
+                **encabezados(),
+                "Prefer": "return=minimal"
+            },
+            json=datos,
+            timeout=15
+        )
+
+        print(
+            "SUPABASE ACTUALIZAR FILE_ID AUTORIZADO:",
+            respuesta.status_code,
+            respuesta.text
+        )
+
+        return respuesta.status_code in (
+            200,
+            204
+        )
+
+    except Exception as e:
+
+        print(
+            "ERROR ACTUALIZANDO FILE_ID AUTORIZADO:",
+            repr(e)
+        )
+
+        return False
