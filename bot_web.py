@@ -8,18 +8,24 @@ from flask import Flask, request
 from music_database import crear_base
 from music_database import buscar_cancion
 from music_database import guardar_cancion
+from music_database import guardar_busqueda
+from music_database import buscar_ultima_busqueda
 
 
 app = Flask(__name__)
 
 crear_base()
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+BOT_TOKEN = os.environ.get(
+    "BOT_TOKEN",
+    ""
+).strip()
 
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+TELEGRAM_API = (
+    f"https://api.telegram.org/bot{BOT_TOKEN}"
+)
 
 SEARCH_RESULTS = {}
-USER_SEARCHES = {}
 
 
 # =========================================================
@@ -68,7 +74,11 @@ def telegram(method, data=None):
         }
 
 
-def send_message(chat_id, text, reply_markup=None):
+def send_message(
+    chat_id,
+    text,
+    reply_markup=None
+):
 
     data = {
         "chat_id": chat_id,
@@ -182,7 +192,9 @@ def artist_matches(
 ):
 
     artista = normalize(artista)
-    artista_objetivo = normalize(artista_objetivo)
+    artista_objetivo = normalize(
+        artista_objetivo
+    )
 
     if not artista or not artista_objetivo:
         return False
@@ -196,8 +208,13 @@ def artist_matches(
     if artista in artista_objetivo:
         return True
 
-    palabras_artista = words(artista)
-    palabras_objetivo = words(artista_objetivo)
+    palabras_artista = words(
+        artista
+    )
+
+    palabras_objetivo = words(
+        artista_objetivo
+    )
 
     if not palabras_artista or not palabras_objetivo:
         return False
@@ -388,7 +405,7 @@ def deezer_search(query):
 
 
 # =========================================================
-# BUSQUEDA INTELIGENTE
+# BUSQUEDA
 # =========================================================
 
 def search_music(query):
@@ -399,13 +416,6 @@ def search_music(query):
 
     if not resultados:
         return []
-
-    # -----------------------------------------------------
-    # Primero identificamos el artista principal.
-    #
-    # Para eso usamos el artista del resultado con mejor
-    # coincidencia inicial.
-    # -----------------------------------------------------
 
     resultados_iniciales = sorted(
         resultados,
@@ -431,10 +441,6 @@ def search_music(query):
         artista_objetivo
     )
 
-    # -----------------------------------------------------
-    # Ordenar todos los resultados.
-    # -----------------------------------------------------
-
     resultados.sort(
         key=lambda item:
         score_result(
@@ -444,11 +450,6 @@ def search_music(query):
         ),
         reverse=True
     )
-
-    # -----------------------------------------------------
-    # Si detectamos un artista claro, eliminamos resultados
-    # de otros artistas.
-    # -----------------------------------------------------
 
     filtrados = []
 
@@ -468,18 +469,9 @@ def search_music(query):
                 item
             )
 
-    # -----------------------------------------------------
-    # Si el filtro dejó muy pocos resultados, usamos los
-    # resultados originales para no dejar una búsqueda vacía.
-    # -----------------------------------------------------
-
     if len(filtrados) < 1:
 
         filtrados = resultados
-
-    # -----------------------------------------------------
-    # Eliminar duplicados exactos de artista + título.
-    # -----------------------------------------------------
 
     unicas = []
 
@@ -517,8 +509,8 @@ def search_music(query):
             item
         )
 
-        # SIEMPRE máximo 8 resultados
-        if len(unicas) >= 8:
+        # Máximo 5 resultados
+        if len(unicas) >= 5:
             break
 
     print(
@@ -565,10 +557,6 @@ def show_results(
     SEARCH_RESULTS[
         chat_id
     ] = resultados
-
-    USER_SEARCHES[
-        chat_id
-    ] = query
 
     botones = []
 
@@ -639,10 +627,6 @@ def send_song(
         0
     )
 
-    # =====================================================
-    # BUSCAR FILE_ID EN SUPABASE
-    # =====================================================
-
     guardada = buscar_cancion(
         artist,
         title
@@ -703,14 +687,6 @@ def send_song(
 
                 return
 
-            print(
-                "FILE_ID GUARDADO NO PUDO ENVIARSE."
-            )
-
-    # =====================================================
-    # SI NO HAY FILE_ID
-    # =====================================================
-
     if not preview:
 
         send_message(
@@ -740,10 +716,6 @@ def send_song(
         "AUDIO RESULT:",
         resultado
     )
-
-    # =====================================================
-    # GUARDAR FILE_ID EN SUPABASE
-    # =====================================================
 
     if resultado.get("ok"):
 
@@ -779,10 +751,6 @@ def send_song(
                 "ERROR GUARDANDO FILE_ID:",
                 repr(e)
             )
-
-    # =====================================================
-    # ENLACE DEEZER
-    # =====================================================
 
     link = item.get(
         "link",
@@ -886,10 +854,6 @@ def webhook():
                 callback_id
             )
 
-            # ---------------------------------------------
-            # CANCION
-            # ---------------------------------------------
-
             if data.startswith(
                 "song_"
             ):
@@ -929,10 +893,6 @@ def webhook():
                     )
 
                 return "OK", 200
-
-            # ---------------------------------------------
-            # NUEVA BUSQUEDA
-            # ---------------------------------------------
 
             if data == "new_search":
 
@@ -998,10 +958,82 @@ def webhook():
                 "🔎 Escribí el artista y el título de la canción.\n\n"
                 "Ejemplo:\n"
                 "Rodrigo Tapari Una cerveza"
-            
+            )
 
-        
-            
-            
-            
-                    
+            return "OK", 200
+
+        # =================================================
+        # MIS BUSQUEDAS
+        # =================================================
+
+        if text == "🎧 Mis búsquedas":
+
+            ultima = buscar_ultima_busqueda(
+                chat_id
+            )
+
+            if ultima:
+
+                send_message(
+                    chat_id,
+                    f"🎧 Última búsqueda:\n\n{ultima}"
+                )
+
+                resultados = search_music(
+                    ultima
+                )
+
+                show_results(
+                    chat_id,
+                    ultima,
+                    resultados
+                )
+
+            else:
+
+                send_message(
+                    chat_id,
+                    "🎧 Todavía no tenés búsquedas."
+                )
+
+            return "OK", 200
+
+        # =================================================
+        # INFOZONAL
+        # =================================================
+
+        if text == "ℹ️ InfoZonal":
+
+            send_message(
+                chat_id,
+                "📰 InfoZonal\n\n"
+                "Noticias de San Andrés de Giles y zona."
+            )
+
+            return "OK", 200
+
+        # =================================================
+        # AYUDA
+        # =================================================
+
+        if text == "❓ Ayuda":
+
+            send_message(
+                chat_id,
+                "❓ Ayuda\n\n"
+                "Escribí el nombre del artista "
+                "y la canción que querés buscar.\n\n"
+                "Ejemplo:\n"
+                "Rodrigo Tapari Una cerveza"
+            )
+
+            return "OK", 200
+
+        # =================================================
+        # BUSQUEDA NORMAL
+        # =================================================
+
+        if text:
+
+            # Guardar búsqueda en Supabase
+            guardada = gua
