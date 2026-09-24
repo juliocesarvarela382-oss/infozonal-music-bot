@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 
 
@@ -24,6 +25,90 @@ def encabezados():
 def crear_base():
     # Las tablas ya fueron creadas directamente en Supabase.
     pass
+
+
+# ============================================================
+# NORMALIZACION
+# ============================================================
+
+def normalizar_texto(texto):
+
+    texto = str(texto or "").lower().strip()
+
+    reemplazos = {
+        "á": "a",
+        "é": "e",
+        "í": "i",
+        "ó": "o",
+        "ú": "u",
+        "ü": "u",
+        "ñ": "n"
+    }
+
+    for origen, destino in reemplazos.items():
+        texto = texto.replace(origen, destino)
+
+    texto = re.sub(
+        r"[^a-z0-9\s]",
+        " ",
+        texto
+    )
+
+    texto = re.sub(
+        r"\s+",
+        " ",
+        texto
+    )
+
+    return texto.strip()
+
+
+def coincide_texto_autorizado(
+    valor_guardado,
+    valor_buscado
+):
+
+    guardado = normalizar_texto(
+        valor_guardado
+    )
+
+    buscado = normalizar_texto(
+        valor_buscado
+    )
+
+    if not guardado or not buscado:
+        return False
+
+    if guardado == buscado:
+        return True
+
+    if guardado in buscado:
+        return True
+
+    if buscado in guardado:
+        return True
+
+    palabras_guardado = set(
+        guardado.split()
+    )
+
+    palabras_buscado = set(
+        buscado.split()
+    )
+
+    if not palabras_guardado or not palabras_buscado:
+        return False
+
+    coincidencias = (
+        palabras_guardado &
+        palabras_buscado
+    )
+
+    return len(coincidencias) >= min(
+        2,
+        len(palabras_guardado),
+        len(palabras_buscado)
+    )
 
 
 # ============================================================
@@ -239,6 +324,7 @@ def buscar_archivo_autorizado(
 
     try:
 
+        # Primero buscamos coincidencia exacta.
         url = (
             f"{SUPABASE_URL}/rest/v1/archivos_autorizados"
             f"?artista=eq.{requests.utils.quote(artista)}"
@@ -255,7 +341,7 @@ def buscar_archivo_autorizado(
         )
 
         print(
-            "SUPABASE BUSCAR ARCHIVO AUTORIZADO:",
+            "SUPABASE BUSCAR ARCHIVO AUTORIZADO EXACTO:",
             respuesta.status_code,
             respuesta.text
         )
@@ -265,10 +351,106 @@ def buscar_archivo_autorizado(
 
         datos = respuesta.json()
 
-        if not datos:
+        if datos:
+            return datos[0]
+
+        # Si no hay coincidencia exacta,
+        # buscamos coincidencias flexibles.
+        url_todos = (
+            f"{SUPABASE_URL}/rest/v1/archivos_autorizados"
+            f"?select=id,artista,titulo,archivo_url,file_id,duracion"
+            f"&order=id.desc"
+            f"&limit=1000"
+        )
+
+        respuesta_todos = requests.get(
+            url_todos,
+            headers=encabezados(),
+            timeout=15
+        )
+
+        print(
+            "SUPABASE BUSCAR ARCHIVO AUTORIZADO FLEXIBLE:",
+            respuesta_todos.status_code,
+            respuesta_todos.text
+        )
+
+        if respuesta_todos.status_code != 200:
             return None
 
-        return datos[0]
+        registros = respuesta_todos.json()
+
+        mejor = None
+        mejor_puntaje = -1
+
+        artista_buscado = normalizar_texto(
+            artista
+        )
+
+        titulo_buscado = normalizar_texto(
+            titulo
+        )
+
+        for registro in registros:
+
+            artista_guardado = registro.get(
+                "artista",
+                ""
+            )
+
+            titulo_guardado = registro.get(
+                "titulo",
+                ""
+            )
+
+            artista_guardado_norm = normalizar_texto(
+                artista_guardado
+            )
+
+            titulo_guardado_norm = normalizar_texto(
+                titulo_guardado
+            )
+
+            puntaje = 0
+
+            if coincide_texto_autorizado(
+                artista_guardado,
+                artista
+            ):
+                puntaje += 100
+
+            if coincide_texto_autorizado(
+                titulo_guardado,
+                titulo
+            ):
+                puntaje += 100
+
+            if (
+                artista_guardado_norm ==
+                artista_buscado
+            ):
+                puntaje += 50
+
+            if (
+                titulo_guardado_norm ==
+                titulo_buscado
+            ):
+                puntaje += 50
+
+            if puntaje > mejor_puntaje:
+                mejor_puntaje = puntaje
+                mejor = registro
+
+        if mejor and mejor_puntaje >= 200:
+
+            print(
+                "ARCHIVO AUTORIZADO ENCONTRADO FLEXIBLE:",
+                mejor
+            )
+
+            return mejor
+
+        return None
 
     except Exception as e:
 
