@@ -28,6 +28,16 @@ ADMIN_CHAT_ID = os.environ.get(
     ""
 ).strip()
 
+SUPABASE_URL = os.environ.get(
+    "SUPABASE_URL",
+    ""
+).strip()
+
+SUPABASE_KEY = os.environ.get(
+    "SUPABASE_KEY",
+    ""
+).strip()
+
 TELEGRAM_API = (
     f"https://api.telegram.org/bot{BOT_TOKEN}"
 )
@@ -118,6 +128,20 @@ def answer_callback(callback_id):
 
 
 # ============================================================
+# ADMINISTRADOR
+# ============================================================
+
+def es_administrador(chat_id):
+
+    if not ADMIN_CHAT_ID:
+        return False
+
+    return str(chat_id) == str(
+        ADMIN_CHAT_ID
+    )
+
+
+# ============================================================
 # MENU PRINCIPAL
 # ============================================================
 
@@ -146,6 +170,24 @@ def main_menu(chat_id):
         ],
         "resize_keyboard": True
     }
+
+    if es_administrador(chat_id):
+
+        teclado["keyboard"].append(
+            [
+                {
+                    "text": "📚 Mis canciones autorizadas"
+                }
+            ]
+        )
+
+        teclado["keyboard"].append(
+            [
+                {
+                    "text": "📥 Cargar canción autorizada"
+                }
+            ]
+        )
 
     send_message(
         chat_id,
@@ -622,7 +664,6 @@ def send_song(
         0
     )
 
-    # Archivo autorizado completo
     autorizado = buscar_archivo_autorizado(
         artist,
         title
@@ -655,7 +696,6 @@ def send_song(
 
                 return
 
-    # Cache de preview
     guardada = buscar_cancion(
         artist,
         title
@@ -793,18 +833,161 @@ def send_song(
 
 
 # ============================================================
-# CARGA DE ARCHIVOS AUTORIZADOS
+# LISTAR CANCIONES AUTORIZADAS
 # ============================================================
 
-def es_administrador(chat_id):
+def listar_canciones_autorizadas():
 
-    if not ADMIN_CHAT_ID:
-        return False
+    try:
 
-    return str(chat_id) == str(
-        ADMIN_CHAT_ID
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            return None
+
+        url = (
+            f"{SUPABASE_URL}/rest/v1/archivos_autorizados"
+            f"?select=id,artista,titulo,duracion"
+            f"&order=id.asc"
+            f"&limit=1000"
+        )
+
+        respuesta = requests.get(
+            url,
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization":
+                f"Bearer {SUPABASE_KEY}",
+                "Content-Type":
+                "application/json"
+            },
+            timeout=15
+        )
+
+        print(
+            "SUPABASE LISTAR AUTORIZADAS:",
+            respuesta.status_code,
+            respuesta.text
+        )
+
+        if respuesta.status_code != 200:
+            return None
+
+        return respuesta.json()
+
+    except Exception as e:
+
+        print(
+            "ERROR LISTANDO AUTORIZADAS:",
+            repr(e)
+        )
+
+        return None
+
+
+def mostrar_canciones_autorizadas(chat_id):
+
+    if not es_administrador(chat_id):
+
+        send_message(
+            chat_id,
+            "❌ Esta función es solamente para el administrador."
+        )
+
+        return
+
+    canciones = listar_canciones_autorizadas()
+
+    if canciones is None:
+
+        send_message(
+            chat_id,
+            "❌ No pude consultar la biblioteca autorizada."
+        )
+
+        return
+
+    if not canciones:
+
+        send_message(
+            chat_id,
+            "📚 Biblioteca autorizada\n\n"
+            "Todavía no hay canciones cargadas."
+        )
+
+        return
+
+    lineas = [
+        "📚 BIBLIOTECA AUTORIZADA",
+        "",
+        f"🎵 Canciones cargadas: {len(canciones)}",
+        ""
+    ]
+
+    for indice, cancion in enumerate(
+        canciones,
+        start=1
+    ):
+
+        artista = cancion.get(
+            "artista",
+            "Sin artista"
+        )
+
+        titulo = cancion.get(
+            "titulo",
+            "Sin título"
+        )
+
+        lineas.append(
+            f"{indice}. 🎤 {artista} – {titulo}"
+        )
+
+    texto = "\n".join(
+        lineas
     )
 
+    if len(texto) > 4000:
+
+        partes = []
+
+        actual = ""
+
+        for linea in lineas:
+
+            if len(actual) + len(linea) + 1 > 3800:
+
+                if actual:
+                    partes.append(actual)
+
+                actual = linea
+
+            else:
+
+                if actual:
+                    actual += "\n"
+
+                actual += linea
+
+        if actual:
+            partes.append(actual)
+
+        for parte in partes:
+
+            send_message(
+                chat_id,
+                parte
+            )
+
+    else:
+
+        send_message(
+            chat_id,
+            texto
+        )
+
+
+# ============================================================
+# CARGA DE ARCHIVOS AUTORIZADOS
+# ============================================================
 
 def iniciar_carga(chat_id):
 
@@ -1155,6 +1338,24 @@ def webhook():
                 )
 
                 main_menu(
+                    chat_id
+                )
+
+                return "OK", 200
+
+            # Biblioteca autorizada
+            if text == "📚 Mis canciones autorizadas":
+
+                mostrar_canciones_autorizadas(
+                    chat_id
+                )
+
+                return "OK", 200
+
+            # Cargar canción autorizada
+            if text == "📥 Cargar canción autorizada":
+
+                iniciar_carga(
                     chat_id
                 )
 
