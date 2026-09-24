@@ -18,29 +18,41 @@ app = Flask(__name__)
 
 crear_base()
 
+
 BOT_TOKEN = os.environ.get(
     "BOT_TOKEN",
     ""
 ).strip()
+
 
 ADMIN_CHAT_ID = os.environ.get(
     "ADMIN_CHAT_ID",
     ""
 ).strip()
 
+
 SUPABASE_URL = os.environ.get(
     "SUPABASE_URL",
     ""
 ).strip()
+
 
 SUPABASE_KEY = os.environ.get(
     "SUPABASE_KEY",
     ""
 ).strip()
 
+
+JAMENDO_CLIENT_ID = os.environ.get(
+    "JAMENDO_CLIENT_ID",
+    ""
+).strip()
+
+
 TELEGRAM_API = (
     f"https://api.telegram.org/bot{BOT_TOKEN}"
 )
+
 
 SEARCH_RESULTS = {}
 
@@ -115,6 +127,72 @@ def send_message(
         "sendMessage",
         data
     )
+
+
+def telegram_send_audio_file(
+    chat_id,
+    audio_bytes,
+    filename,
+    title,
+    performer,
+    caption=""
+):
+
+    try:
+
+        url = f"{TELEGRAM_API}/sendAudio"
+
+        files = {
+            "audio": (
+                filename,
+                audio_bytes,
+                "audio/mpeg"
+            )
+        }
+
+        data = {
+            "chat_id": chat_id,
+            "title": title,
+            "performer": performer
+        }
+
+        if caption:
+            data["caption"] = caption
+
+        respuesta = requests.post(
+            url,
+            data=data,
+            files=files,
+            timeout=90
+        )
+
+        try:
+            resultado = respuesta.json()
+        except Exception:
+            resultado = {
+                "ok": False,
+                "text": respuesta.text
+            }
+
+        print(
+            "TELEGRAM UPLOAD AUDIO:",
+            respuesta.status_code,
+            resultado
+        )
+
+        return resultado
+
+    except Exception as e:
+
+        print(
+            "ERROR TELEGRAM UPLOAD AUDIO:",
+            repr(e)
+        )
+
+        return {
+            "ok": False,
+            "error": str(e)
+        }
 
 
 def answer_callback(callback_id):
@@ -243,6 +321,7 @@ def artist_matches(
 ):
 
     artista = normalize(artista)
+
     artista_objetivo = normalize(
         artista_objetivo
     )
@@ -367,6 +446,446 @@ def score_result(
 
 
 # ============================================================
+# SUPABASE CACHE JAMENDO
+# ============================================================
+
+def jamendo_cache_key(
+    artist,
+    title
+):
+
+    return normalize(
+        f"{artist} {title}"
+    )
+
+
+def jamendo_cache_get(
+    artist,
+    title
+):
+
+    try:
+
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            return None
+
+        clave = jamendo_cache_key(
+            artist,
+            title
+        )
+
+        url = (
+            f"{SUPABASE_URL}/rest/v1/song_cache"
+        )
+
+        respuesta = requests.get(
+            url,
+            params={
+                "select": "telegram_file_id",
+                "query": f"eq.{clave}",
+                "limit": "1"
+            },
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization":
+                f"Bearer {SUPABASE_KEY}"
+            },
+            timeout=15
+        )
+
+        if respuesta.status_code != 200:
+
+            print(
+                "SUPABASE CACHE GET:",
+                respuesta.status_code,
+                respuesta.text
+            )
+
+            return None
+
+        filas = respuesta.json()
+
+        if filas:
+
+            return filas[0].get(
+                "telegram_file_id"
+            )
+
+        return None
+
+    except Exception as e:
+
+        print(
+            "ERROR CACHE GET:",
+            repr(e)
+        )
+
+        return None
+
+
+def jamendo_cache_save(
+    artist,
+    title,
+    file_id
+):
+
+    try:
+
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            return False
+
+        clave = jamendo_cache_key(
+            artist,
+            title
+        )
+
+        url = (
+            f"{SUPABASE_URL}/rest/v1/song_cache"
+        )
+
+        respuesta = requests.post(
+            url,
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization":
+                f"Bearer {SUPABASE_KEY}",
+                "Content-Type":
+                "application/json",
+                "Prefer":
+                "resolution=merge-duplicates,return=minimal"
+            },
+            json={
+                "query": clave,
+                "telegram_file_id": file_id
+            },
+            timeout=15
+        )
+
+        print(
+            "SUPABASE CACHE SAVE:",
+            respuesta.status_code,
+            respuesta.text
+        )
+
+        return respuesta.status_code in (
+            200,
+            201
+        )
+
+    except Exception as e:
+
+        print(
+            "ERROR CACHE SAVE:",
+            repr(e)
+        )
+
+        return False
+
+
+# ============================================================
+# JAMENDO
+# ============================================================
+
+def jamendo_search(query):
+
+    if not JAMENDO_CLIENT_ID:
+        return []
+
+    try:
+
+        respuesta = requests.get(
+            "https://api.jamendo.com/v3.0/tracks/",
+            params={
+                "client_id": JAMENDO_CLIENT_ID,
+                "format": "json",
+                "search": query,
+                "limit": 20,
+                "type": "single albumtrack",
+                "order": "relevance",
+                "audiodlformat": "mp32"
+            },
+            timeout=20
+        )
+
+        print(
+            "JAMENDO:",
+            respuesta.status_code
+        )
+
+        if respuesta.status_code != 200:
+
+            print(
+                "JAMENDO ERROR:",
+                respuesta.text
+            )
+
+            return []
+
+        datos = respuesta.json()
+
+        resultados = []
+
+        for item in datos.get(
+            "results",
+            []
+        ):
+
+            if not item.get(
+                "audiodownload_allowed",
+                False
+            ):
+                continue
+
+            download_url = item.get(
+                "audiodownload",
+                ""
+            )
+
+            if not download_url:
+                continue
+
+            resultados.append(
+                {
+                    "id":
+                    item.get(
+                        "id"
+                    ),
+
+                    "artist":
+                    item.get(
+                        "artist_name",
+                        ""
+                    ),
+
+                    "title":
+                    item.get(
+                        "name",
+                        ""
+                    ),
+
+                    "duration":
+                    item.get(
+                        "duration",
+                        0
+                    ),
+
+                    "download":
+                    download_url,
+
+                    "link":
+                    item.get(
+                        "shareurl",
+                        ""
+                    ),
+
+                    "source":
+                    "jamendo"
+                }
+            )
+
+        resultados.sort(
+            key=lambda item:
+            score_result(
+                item,
+                query
+            ),
+            reverse=True
+        )
+
+        unicos = []
+
+        vistos = set()
+
+        for item in resultados:
+
+            clave = (
+                normalize(
+                    item.get(
+                        "artist",
+                        ""
+                    )
+                ),
+                normalize(
+                    item.get(
+                        "title",
+                        ""
+                    )
+                )
+            )
+
+            if clave in vistos:
+                continue
+
+            vistos.add(
+                clave
+            )
+
+            unicos.append(
+                item
+            )
+
+            if len(unicos) >= 5:
+                break
+
+        print(
+            "JAMENDO RESULTADOS:",
+            len(unicos)
+        )
+
+        return unicos
+
+    except Exception as e:
+
+        print(
+            "ERROR JAMENDO:",
+            repr(e)
+        )
+
+        return []
+
+
+def send_jamendo_song(
+    chat_id,
+    item
+):
+
+    artist = item.get(
+        "artist",
+        ""
+    )
+
+    title = item.get(
+        "title",
+        ""
+    )
+
+    download_url = item.get(
+        "download",
+        ""
+    )
+
+    cached_file_id = jamendo_cache_get(
+        artist,
+        title
+    )
+
+    if cached_file_id:
+
+        resultado = telegram(
+            "sendAudio",
+            {
+                "chat_id": chat_id,
+                "audio": cached_file_id,
+                "title": title,
+                "performer": artist
+            }
+        )
+
+        if resultado.get(
+            "ok"
+        ):
+
+            send_message(
+                chat_id,
+                "📥 Audio completo enviado desde Jamendo."
+            )
+
+            return True
+
+    if not download_url:
+
+        send_message(
+            chat_id,
+            "❌ Esta canción no tiene una descarga autorizada disponible."
+        )
+
+        return True
+
+    send_message(
+        chat_id,
+        "📥 Descargando audio autorizado desde Jamendo..."
+    )
+
+    try:
+
+        respuesta = requests.get(
+            download_url,
+            timeout=90
+        )
+
+        if (
+            respuesta.status_code != 200
+            or not respuesta.content
+        ):
+
+            send_message(
+                chat_id,
+                "❌ Jamendo no pudo entregar el archivo autorizado."
+            )
+
+            return True
+
+        resultado = telegram_send_audio_file(
+            chat_id,
+            respuesta.content,
+            "infozonal_music.mp3",
+            title,
+            artist,
+            "Audio completo autorizado por Jamendo"
+        )
+
+        if resultado.get(
+            "ok"
+        ):
+
+            file_id = (
+                resultado
+                .get(
+                    "result",
+                    {}
+                )
+                .get(
+                    "audio",
+                    {}
+                )
+                .get(
+                    "file_id"
+                )
+            )
+
+            if file_id:
+
+                jamendo_cache_save(
+                    artist,
+                    title,
+                    file_id
+                )
+
+            return True
+
+        send_message(
+            chat_id,
+            "❌ No pude enviar el audio de Jamendo a Telegram."
+        )
+
+        return True
+
+    except Exception as e:
+
+        print(
+            "ERROR DESCARGA JAMENDO:",
+            repr(e)
+        )
+
+        send_message(
+            chat_id,
+            "❌ Ocurrió un error al descargar el audio autorizado."
+        )
+
+        return True
+
+
+# ============================================================
 # DEEZER
 # ============================================================
 
@@ -434,12 +953,23 @@ def deezer_search(query):
 
             resultados.append(
                 {
-                    "id": track_id,
-                    "artist": artista,
-                    "title": titulo,
-                    "preview": preview,
-                    "link": link,
-                    "duration": duration
+                    "id":
+                    track_id,
+
+                    "artist":
+                    artista,
+
+                    "title":
+                    titulo,
+
+                    "preview":
+                    preview,
+
+                    "link":
+                    link,
+
+                    "duration":
+                    duration
                 }
             )
 
@@ -460,6 +990,14 @@ def deezer_search(query):
 # ============================================================
 
 def search_music(query):
+
+    resultados_jamendo = jamendo_search(
+        query
+    )
+
+    if resultados_jamendo:
+
+        return resultados_jamendo
 
     resultados = deezer_search(
         query
@@ -618,7 +1156,9 @@ def show_results(
         botones.append(
             [
                 {
-                    "text": texto[:60],
+                    "text":
+                    texto[:60],
+
                     "callback_data":
                     f"song_{index}"
                 }
@@ -630,7 +1170,8 @@ def show_results(
         "🎵 Resultados encontrados:\n\n"
         "Elegí una canción:",
         {
-            "inline_keyboard": botones
+            "inline_keyboard":
+            botones
         }
     )
 
@@ -643,6 +1184,17 @@ def send_song(
     chat_id,
     item
 ):
+
+    if item.get(
+        "source"
+    ) == "jamendo":
+
+        send_jamendo_song(
+            chat_id,
+            item
+        )
+
+        return
 
     title = item.get(
         "title",
@@ -680,14 +1232,23 @@ def send_song(
             resultado = telegram(
                 "sendAudio",
                 {
-                    "chat_id": chat_id,
-                    "audio": file_id_autorizado,
-                    "title": title,
-                    "performer": artist
+                    "chat_id":
+                    chat_id,
+
+                    "audio":
+                    file_id_autorizado,
+
+                    "title":
+                    title,
+
+                    "performer":
+                    artist
                 }
             )
 
-            if resultado.get("ok"):
+            if resultado.get(
+                "ok"
+            ):
 
                 send_message(
                     chat_id,
@@ -710,14 +1271,23 @@ def send_song(
             resultado = telegram(
                 "sendAudio",
                 {
-                    "chat_id": chat_id,
-                    "audio": file_id,
-                    "title": title,
-                    "performer": artist
+                    "chat_id":
+                    chat_id,
+
+                    "audio":
+                    file_id,
+
+                    "title":
+                    title,
+
+                    "performer":
+                    artist
                 }
             )
 
-            if resultado.get("ok"):
+            if resultado.get(
+                "ok"
+            ):
 
                 link = item.get(
                     "link",
@@ -735,7 +1305,9 @@ def send_song(
                                     {
                                         "text":
                                         "🔗 Escuchar canción completa",
-                                        "url": link
+
+                                        "url":
+                                        link
                                     }
                                 ]
                             ]
@@ -761,11 +1333,20 @@ def send_song(
     resultado = telegram(
         "sendAudio",
         {
-            "chat_id": chat_id,
-            "audio": preview,
-            "title": title,
-            "performer": artist,
-            "caption": "Preview de 30 segundos"
+            "chat_id":
+            chat_id,
+
+            "audio":
+            preview,
+
+            "title":
+            title,
+
+            "performer":
+            artist,
+
+            "caption":
+            "Preview de 30 segundos"
         }
     )
 
@@ -774,15 +1355,25 @@ def send_song(
         resultado
     )
 
-    if resultado.get("ok"):
+    if resultado.get(
+        "ok"
+    ):
 
         try:
 
             file_id = (
                 resultado
-                .get("result", {})
-                .get("audio", {})
-                .get("file_id")
+                .get(
+                    "result",
+                    {}
+                )
+                .get(
+                    "audio",
+                    {}
+                )
+                .get(
+                    "file_id"
+                )
             )
 
             if file_id:
@@ -817,14 +1408,18 @@ def send_song(
                         {
                             "text":
                             "🔗 Escuchar canción completa",
-                            "url": link
+
+                            "url":
+                            link
                         }
                     ]
                 ]
             }
         )
 
-    if not resultado.get("ok"):
+    if not resultado.get(
+        "ok"
+    ):
 
         send_message(
             chat_id,
@@ -853,9 +1448,12 @@ def listar_canciones_autorizadas():
         respuesta = requests.get(
             url,
             headers={
-                "apikey": SUPABASE_KEY,
+                "apikey":
+                SUPABASE_KEY,
+
                 "Authorization":
                 f"Bearer {SUPABASE_KEY}",
+
                 "Content-Type":
                 "application/json"
             },
@@ -883,9 +1481,13 @@ def listar_canciones_autorizadas():
         return None
 
 
-def mostrar_canciones_autorizadas(chat_id):
+def mostrar_canciones_autorizadas(
+    chat_id
+):
 
-    if not es_administrador(chat_id):
+    if not es_administrador(
+        chat_id
+    ):
 
         send_message(
             chat_id,
@@ -953,10 +1555,16 @@ def mostrar_canciones_autorizadas(chat_id):
 
         for linea in lineas:
 
-            if len(actual) + len(linea) + 1 > 3800:
+            if len(
+                actual
+            ) + len(
+                linea
+            ) + 1 > 3800:
 
                 if actual:
-                    partes.append(actual)
+                    partes.append(
+                        actual
+                    )
 
                 actual = linea
 
@@ -968,7 +1576,9 @@ def mostrar_canciones_autorizadas(chat_id):
                 actual += linea
 
         if actual:
-            partes.append(actual)
+            partes.append(
+                actual
+            )
 
         for parte in partes:
 
@@ -989,9 +1599,13 @@ def mostrar_canciones_autorizadas(chat_id):
 # CARGA DE ARCHIVOS AUTORIZADOS
 # ============================================================
 
-def iniciar_carga(chat_id):
+def iniciar_carga(
+    chat_id
+):
 
-    if not es_administrador(chat_id):
+    if not es_administrador(
+        chat_id
+    ):
 
         send_message(
             chat_id,
@@ -1003,7 +1617,8 @@ def iniciar_carga(chat_id):
     CARGAS[
         chat_id
     ] = {
-        "paso": "artista"
+        "paso":
+        "artista"
     }
 
     send_message(
@@ -1025,7 +1640,9 @@ def procesar_carga_texto(
     if not estado:
         return False
 
-    if not es_administrador(chat_id):
+    if not es_administrador(
+        chat_id
+    ):
 
         CARGAS.pop(
             chat_id,
@@ -1088,7 +1705,9 @@ def procesar_archivo_audio(
     if not estado:
         return False
 
-    if not es_administrador(chat_id):
+    if not es_administrador(
+        chat_id
+    ):
 
         CARGAS.pop(
             chat_id,
@@ -1288,7 +1907,6 @@ def webhook():
             if not chat_id:
                 return "OK", 200
 
-            # Primero comprobamos si llegó un audio
             if procesar_archivo_audio(
                 chat_id,
                 message
@@ -1296,7 +1914,6 @@ def webhook():
 
                 return "OK", 200
 
-            # /start
             if text == "/start":
 
                 main_menu(
@@ -1305,7 +1922,6 @@ def webhook():
 
                 return "OK", 200
 
-            # /miid
             if text == "/miid":
 
                 send_message(
@@ -1315,7 +1931,6 @@ def webhook():
 
                 return "OK", 200
 
-            # /cargar
             if text == "/cargar":
 
                 iniciar_carga(
@@ -1324,7 +1939,6 @@ def webhook():
 
                 return "OK", 200
 
-            # /cancelar
             if text == "/cancelar":
 
                 CARGAS.pop(
@@ -1343,7 +1957,6 @@ def webhook():
 
                 return "OK", 200
 
-            # Biblioteca autorizada
             if text == "📚 Mis canciones autorizadas":
 
                 mostrar_canciones_autorizadas(
@@ -1352,7 +1965,6 @@ def webhook():
 
                 return "OK", 200
 
-            # Cargar canción autorizada
             if text == "📥 Cargar canción autorizada":
 
                 iniciar_carga(
@@ -1361,7 +1973,6 @@ def webhook():
 
                 return "OK", 200
 
-            # Si estamos cargando artista/título
             if procesar_carga_texto(
                 chat_id,
                 text
@@ -1369,7 +1980,6 @@ def webhook():
 
                 return "OK", 200
 
-            # Buscar música
             if text == "🔎 Buscar música":
 
                 send_message(
@@ -1381,7 +1991,6 @@ def webhook():
 
                 return "OK", 200
 
-            # Mis búsquedas
             if text == "🎧 Mis búsquedas":
 
                 ultima = buscar_ultima_busqueda(
@@ -1416,20 +2025,20 @@ def webhook():
 
                 return "OK", 200
 
-            # Información
             if text == "ℹ️ InfoZonal":
 
                 send_message(
                     chat_id,
                     "🎵 InfoZonal Music\n\n"
                     "Bot de búsqueda musical de InfoZonal.\n\n"
-                    "Las búsquedas utilizan información "
-                    "disponible en Deezer."
+                    "Las búsquedas priorizan música descargable "
+                    "desde Jamendo cuando el artista permite la descarga.\n\n"
+                    "Si no hay una descarga autorizada disponible, "
+                    "se muestra el resultado de Deezer."
                 )
 
                 return "OK", 200
 
-            # Ayuda
             if text == "❓ Ayuda":
 
                 send_message(
@@ -1438,12 +2047,13 @@ def webhook():
                     "Escribí artista y título para buscar una canción.\n\n"
                     "Ejemplo:\n"
                     "Abel Pintos Sin principio ni final\n\n"
-                    "El bot muestra hasta 5 resultados."
+                    "El bot muestra hasta 5 resultados.\n\n"
+                    "Las descargas automáticas se realizan únicamente "
+                    "cuando Jamendo indica que la descarga está permitida."
                 )
 
                 return "OK", 200
 
-            # Texto libre = búsqueda
             if text:
 
                 guardar_busqueda(
@@ -1464,7 +2074,7 @@ def webhook():
                 return "OK", 200
 
         # ----------------------------------------------------
-        # CALLBACKS DE LOS BOTONES
+        # CALLBACKS
         # ----------------------------------------------------
 
         callback = update.get(
@@ -1522,8 +2132,11 @@ def webhook():
                     []
                 )
 
-                if index < 0 or index >= len(
-                    resultados
+                if (
+                    index < 0
+                    or index >= len(
+                        resultados
+                    )
                 ):
 
                     send_message(
