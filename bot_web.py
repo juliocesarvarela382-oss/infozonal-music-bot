@@ -24,35 +24,29 @@ BOT_TOKEN = os.environ.get(
     ""
 ).strip()
 
-
 ADMIN_CHAT_ID = os.environ.get(
     "ADMIN_CHAT_ID",
     ""
 ).strip()
-
 
 SUPABASE_URL = os.environ.get(
     "SUPABASE_URL",
     ""
 ).strip()
 
-
 SUPABASE_KEY = os.environ.get(
     "SUPABASE_KEY",
     ""
 ).strip()
-
 
 JAMENDO_CLIENT_ID = os.environ.get(
     "JAMENDO_CLIENT_ID",
     ""
 ).strip()
 
-
 TELEGRAM_API = (
     f"https://api.telegram.org/bot{BOT_TOKEN}"
 )
-
 
 SEARCH_RESULTS = {}
 
@@ -433,7 +427,6 @@ def score_result(
                 artista_objetivo
             ):
                 score += 20
-
             else:
                 score -= 20
 
@@ -478,25 +471,72 @@ def jamendo_cache_get(
             f"{SUPABASE_URL}/rest/v1/song_cache"
         )
 
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization":
+            f"Bearer {SUPABASE_KEY}"
+        }
+
+        # ----------------------------------------------------
+        # 1. BUSQUEDA EXACTA
+        # ----------------------------------------------------
+
         respuesta = requests.get(
             url,
             params={
-                "select": "telegram_file_id",
+                "select": "query,telegram_file_id",
                 "query": f"eq.{clave}",
                 "limit": "1"
             },
-            headers={
-                "apikey": SUPABASE_KEY,
-                "Authorization":
-                f"Bearer {SUPABASE_KEY}"
+            headers=headers,
+            timeout=15
+        )
+
+        if respuesta.status_code == 200:
+
+            filas = respuesta.json()
+
+            if filas:
+
+                file_id = filas[0].get(
+                    "telegram_file_id"
+                )
+
+                if file_id:
+
+                    print(
+                        "CACHE ENCONTRADO EXACTO:",
+                        clave
+                    )
+
+                    return file_id
+
+        else:
+
+            print(
+                "SUPABASE CACHE GET EXACTO:",
+                respuesta.status_code,
+                respuesta.text
+            )
+
+        # ----------------------------------------------------
+        # 2. BUSQUEDA FLEXIBLE
+        # ----------------------------------------------------
+
+        respuesta = requests.get(
+            url,
+            params={
+                "select": "query,telegram_file_id",
+                "limit": "1000"
             },
+            headers=headers,
             timeout=15
         )
 
         if respuesta.status_code != 200:
 
             print(
-                "SUPABASE CACHE GET:",
+                "SUPABASE CACHE GET FLEXIBLE:",
                 respuesta.status_code,
                 respuesta.text
             )
@@ -505,11 +545,184 @@ def jamendo_cache_get(
 
         filas = respuesta.json()
 
-        if filas:
+        objetivo_artista = normalize(
+            artist
+        )
 
-            return filas[0].get(
+        objetivo_titulo = normalize(
+            title
+        )
+
+        palabras_artista = words(
+            artist
+        )
+
+        palabras_titulo = words(
+            title
+        )
+
+        mejor_file_id = None
+        mejor_score = -1
+        mejor_query = ""
+
+        for fila in filas:
+
+            query_guardada = normalize(
+                fila.get(
+                    "query",
+                    ""
+                )
+            )
+
+            file_id = fila.get(
                 "telegram_file_id"
             )
+
+            if not query_guardada or not file_id:
+                continue
+
+            palabras_guardadas = words(
+                query_guardada
+            )
+
+            if not palabras_guardadas:
+                continue
+
+            puntaje = 0
+
+            # ------------------------------------------------
+            # Coincidencia exacta completa
+            # ------------------------------------------------
+
+            if query_guardada == clave:
+
+                puntaje += 1000
+
+            # ------------------------------------------------
+            # Coincidencia exacta del título
+            # ------------------------------------------------
+
+            if objetivo_titulo:
+
+                if objetivo_titulo in query_guardada:
+                    puntaje += 300
+
+                palabras_titulo_coinciden = (
+                    palabras_titulo &
+                    palabras_guardadas
+                )
+
+                if palabras_titulo:
+
+                    porcentaje_titulo = (
+                        len(
+                            palabras_titulo_coinciden
+                        )
+                        /
+                        len(
+                            palabras_titulo
+                        )
+                    )
+
+                    if porcentaje_titulo == 1:
+                        puntaje += 250
+
+                    elif porcentaje_titulo >= 0.5:
+                        puntaje += 100
+
+            # ------------------------------------------------
+            # Coincidencia del artista
+            # ------------------------------------------------
+
+            if objetivo_artista:
+
+                if objetivo_artista in query_guardada:
+                    puntaje += 300
+
+                palabras_artista_coinciden = (
+                    palabras_artista &
+                    palabras_guardadas
+                )
+
+                if palabras_artista:
+
+                    porcentaje_artista = (
+                        len(
+                            palabras_artista_coinciden
+                        )
+                        /
+                        len(
+                            palabras_artista
+                        )
+                    )
+
+                    if porcentaje_artista == 1:
+                        puntaje += 250
+
+                    elif porcentaje_artista >= 0.5:
+                        puntaje += 100
+
+            # ------------------------------------------------
+            # Coincidencia de palabras de artista + título
+            # ------------------------------------------------
+
+            objetivo_total = (
+                palabras_artista |
+                palabras_titulo
+            )
+
+            coincidencias_total = (
+                objetivo_total &
+                palabras_guardadas
+            )
+
+            if objetivo_total:
+
+                porcentaje_total = (
+                    len(
+                        coincidencias_total
+                    )
+                    /
+                    len(
+                        objetivo_total
+                    )
+                )
+
+                if porcentaje_total == 1:
+                    puntaje += 200
+
+                elif porcentaje_total >= 0.5:
+                    puntaje += 50
+
+            # ------------------------------------------------
+            # Elegir la mejor coincidencia
+            # ------------------------------------------------
+
+            if puntaje > mejor_score:
+
+                mejor_score = puntaje
+
+                mejor_file_id = file_id
+
+                mejor_query = query_guardada
+
+        if mejor_file_id and mejor_score >= 250:
+
+            print(
+                "CACHE ENCONTRADO FLEXIBLE:",
+                mejor_query,
+                "->",
+                clave,
+                "PUNTAJE:",
+                mejor_score
+            )
+
+            return mejor_file_id
+
+        print(
+            "CACHE NO ENCONTRADO:",
+            clave
+        )
 
         return None
 
