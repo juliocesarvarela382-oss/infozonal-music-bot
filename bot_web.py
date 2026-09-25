@@ -6,8 +6,6 @@ import requests
 from flask import Flask, request
 
 from music_database import crear_base
-from music_database import buscar_cancion
-from music_database import guardar_cancion
 from music_database import guardar_busqueda
 from music_database import buscar_ultima_busqueda
 from music_database import buscar_archivo_autorizado
@@ -477,10 +475,6 @@ def jamendo_cache_get(
             f"Bearer {SUPABASE_KEY}"
         }
 
-        # ----------------------------------------------------
-        # 1. BUSQUEDA EXACTA
-        # ----------------------------------------------------
-
         respuesta = requests.get(
             url,
             params={
@@ -518,10 +512,6 @@ def jamendo_cache_get(
                 respuesta.status_code,
                 respuesta.text
             )
-
-        # ----------------------------------------------------
-        # 2. BUSQUEDA FLEXIBLE
-        # ----------------------------------------------------
 
         respuesta = requests.get(
             url,
@@ -590,17 +580,8 @@ def jamendo_cache_get(
 
             puntaje = 0
 
-            # ------------------------------------------------
-            # Coincidencia exacta completa
-            # ------------------------------------------------
-
             if query_guardada == clave:
-
                 puntaje += 1000
-
-            # ------------------------------------------------
-            # Coincidencia exacta del título
-            # ------------------------------------------------
 
             if objetivo_titulo:
 
@@ -630,10 +611,6 @@ def jamendo_cache_get(
                     elif porcentaje_titulo >= 0.5:
                         puntaje += 100
 
-            # ------------------------------------------------
-            # Coincidencia del artista
-            # ------------------------------------------------
-
             if objetivo_artista:
 
                 if objetivo_artista in query_guardada:
@@ -662,10 +639,6 @@ def jamendo_cache_get(
                     elif porcentaje_artista >= 0.5:
                         puntaje += 100
 
-            # ------------------------------------------------
-            # Coincidencia de palabras de artista + título
-            # ------------------------------------------------
-
             objetivo_total = (
                 palabras_artista |
                 palabras_titulo
@@ -693,10 +666,6 @@ def jamendo_cache_get(
 
                 elif porcentaje_total >= 0.5:
                     puntaje += 50
-
-            # ------------------------------------------------
-            # Elegir la mejor coincidencia
-            # ------------------------------------------------
 
             if puntaje > mejor_score:
 
@@ -1099,106 +1068,6 @@ def send_jamendo_song(
 
 
 # ============================================================
-# DEEZER
-# ============================================================
-
-def deezer_search(query):
-
-    try:
-
-        respuesta = requests.get(
-            "https://api.deezer.com/search",
-            params={
-                "q": query,
-                "limit": 25
-            },
-            timeout=20
-        )
-
-        print(
-            "DEEZER:",
-            respuesta.status_code
-        )
-
-        if respuesta.status_code != 200:
-            return []
-
-        datos = respuesta.json()
-
-        resultados = []
-
-        for item in datos.get(
-            "data",
-            []
-        ):
-
-            artista = item.get(
-                "artist",
-                {}
-            ).get(
-                "name",
-                ""
-            )
-
-            titulo = item.get(
-                "title",
-                ""
-            )
-
-            preview = item.get(
-                "preview",
-                ""
-            )
-
-            link = item.get(
-                "link",
-                ""
-            )
-
-            duration = item.get(
-                "duration",
-                0
-            )
-
-            track_id = item.get(
-                "id"
-            )
-
-            resultados.append(
-                {
-                    "id":
-                    track_id,
-
-                    "artist":
-                    artista,
-
-                    "title":
-                    titulo,
-
-                    "preview":
-                    preview,
-
-                    "link":
-                    link,
-
-                    "duration":
-                    duration
-                }
-            )
-
-        return resultados
-
-    except Exception as e:
-
-        print(
-            "ERROR DEEZER:",
-            repr(e)
-        )
-
-        return []
-
-
-# ============================================================
 # BUSQUEDA
 # ============================================================
 
@@ -1209,117 +1078,9 @@ def search_music(query):
     )
 
     if resultados_jamendo:
-
         return resultados_jamendo
 
-    resultados = deezer_search(
-        query
-    )
-
-    if not resultados:
-        return []
-
-    resultados_iniciales = sorted(
-        resultados,
-        key=lambda item:
-        score_result(
-            item,
-            query
-        ),
-        reverse=True
-    )
-
-    artista_objetivo = ""
-
-    if resultados_iniciales:
-
-        artista_objetivo = resultados_iniciales[0].get(
-            "artist",
-            ""
-        )
-
-    print(
-        "ARTISTA DETECTADO:",
-        artista_objetivo
-    )
-
-    resultados.sort(
-        key=lambda item:
-        score_result(
-            item,
-            query,
-            artista_objetivo
-        ),
-        reverse=True
-    )
-
-    filtrados = []
-
-    for item in resultados:
-
-        artista = item.get(
-            "artist",
-            ""
-        )
-
-        if artist_matches(
-            artista,
-            artista_objetivo
-        ):
-
-            filtrados.append(
-                item
-            )
-
-    if len(filtrados) < 1:
-
-        filtrados = resultados
-
-    unicas = []
-
-    vistas = set()
-
-    for item in filtrados:
-
-        artista = normalize(
-            item.get(
-                "artist",
-                ""
-            )
-        )
-
-        titulo = normalize(
-            item.get(
-                "title",
-                ""
-            )
-        )
-
-        clave = (
-            artista,
-            titulo
-        )
-
-        if clave in vistas:
-            continue
-
-        vistas.add(
-            clave
-        )
-
-        unicas.append(
-            item
-        )
-
-        if len(unicas) >= 5:
-            break
-
-    print(
-        "RESULTADOS FINALES:",
-        len(unicas)
-    )
-
-    return unicas
+    return []
 
 
 # ============================================================
@@ -1336,7 +1097,7 @@ def show_results(
 
         send_message(
             chat_id,
-            "❌ No encontré canciones con esa búsqueda.\n\n"
+            "❌ No encontré canciones con descarga autorizada para esa búsqueda.\n\n"
             "Probá escribiendo artista y título."
         )
 
@@ -1419,16 +1180,6 @@ def send_song(
         ""
     )
 
-    preview = item.get(
-        "preview",
-        ""
-    )
-
-    duration = item.get(
-        "duration",
-        0
-    )
-
     autorizado = buscar_archivo_autorizado(
         artist,
         title
@@ -1470,174 +1221,10 @@ def send_song(
 
                 return
 
-    guardada = buscar_cancion(
-        artist,
-        title
-    )
-
-    if guardada:
-
-        file_id, duracion_guardada = guardada
-
-        if file_id:
-
-            resultado = telegram(
-                "sendAudio",
-                {
-                    "chat_id":
-                    chat_id,
-
-                    "audio":
-                    file_id,
-
-                    "title":
-                    title,
-
-                    "performer":
-                    artist
-                }
-            )
-
-            if resultado.get(
-                "ok"
-            ):
-
-                link = item.get(
-                    "link",
-                    ""
-                )
-
-                if link:
-
-                    send_message(
-                        chat_id,
-                        "🎵 Escuchá la canción completa:",
-                        {
-                            "inline_keyboard": [
-                                [
-                                    {
-                                        "text":
-                                        "🔗 Escuchar canción completa",
-
-                                        "url":
-                                        link
-                                    }
-                                ]
-                            ]
-                        }
-                    )
-
-                return
-
-    if not preview:
-
-        send_message(
-            chat_id,
-            "Encontré la canción, pero no hay preview disponible."
-        )
-
-        return
-
     send_message(
         chat_id,
-        "🎵 Buscando preview de audio..."
+        "❌ Esta canción no está disponible para descarga en este momento."
     )
-
-    resultado = telegram(
-        "sendAudio",
-        {
-            "chat_id":
-            chat_id,
-
-            "audio":
-            preview,
-
-            "title":
-            title,
-
-            "performer":
-            artist,
-
-            "caption":
-            "Preview de 30 segundos"
-        }
-    )
-
-    print(
-        "AUDIO RESULT:",
-        resultado
-    )
-
-    if resultado.get(
-        "ok"
-    ):
-
-        try:
-
-            file_id = (
-                resultado
-                .get(
-                    "result",
-                    {}
-                )
-                .get(
-                    "audio",
-                    {}
-                )
-                .get(
-                    "file_id"
-                )
-            )
-
-            if file_id:
-
-                guardar_cancion(
-                    artist,
-                    title,
-                    file_id,
-                    duration
-                )
-
-        except Exception as e:
-
-            print(
-                "ERROR GUARDANDO FILE_ID:",
-                repr(e)
-            )
-
-    link = item.get(
-        "link",
-        ""
-    )
-
-    if link:
-
-        send_message(
-            chat_id,
-            "🎵 Escuchá la canción completa:",
-            {
-                "inline_keyboard": [
-                    [
-                        {
-                            "text":
-                            "🔗 Escuchar canción completa",
-
-                            "url":
-                            link
-                        }
-                    ]
-                ]
-            }
-        )
-
-    if not resultado.get(
-        "ok"
-    ):
-
-        send_message(
-            chat_id,
-            "❌ No pude enviar el preview de audio."
-        )
 
 
 # ============================================================
@@ -2246,8 +1833,8 @@ def webhook():
                     "Bot de búsqueda musical de InfoZonal.\n\n"
                     "Las búsquedas priorizan música descargable "
                     "desde Jamendo cuando el artista permite la descarga.\n\n"
-                    "Si no hay una descarga autorizada disponible, "
-                    "se muestra el resultado de Deezer."
+                    "Si Jamendo no tiene una descarga autorizada disponible, "
+                    "la canción no estará disponible para descarga por esta vía."
                 )
 
                 return "OK", 200
