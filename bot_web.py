@@ -1068,16 +1068,140 @@ def send_jamendo_song(
 
 
 # ============================================================
+# BUSQUEDA DE BIBLIOTECA AUTORIZADA
+# ============================================================
+
+def buscar_autorizadas_por_consulta(
+    query
+):
+
+    canciones = listar_canciones_autorizadas()
+
+    if not canciones:
+
+        return []
+
+    query_words = words(
+        query
+    )
+
+    if not query_words:
+
+        return []
+
+    resultados = []
+
+    for cancion in canciones:
+
+        artista = cancion.get(
+            "artista",
+            ""
+        )
+
+        titulo = cancion.get(
+            "titulo",
+            ""
+        )
+
+        texto = (
+            f"{artista} {titulo}"
+        )
+
+        palabras_resultado = words(
+            texto
+        )
+
+        if not query_words.issubset(
+            palabras_resultado
+        ):
+
+            continue
+
+        item = {
+            "id":
+            cancion.get(
+                "id"
+            ),
+
+            "artist":
+            artista,
+
+            "title":
+            titulo,
+
+            "duration":
+            cancion.get(
+                "duracion",
+                0
+            ),
+
+            "source":
+            "autorizado"
+        }
+
+        item["_score"] = score_result(
+            item,
+            query
+        )
+
+        resultados.append(
+            item
+        )
+
+    resultados.sort(
+        key=lambda item:
+        item.get(
+            "_score",
+            0
+        ),
+        reverse=True
+    )
+
+    for item in resultados:
+
+        item.pop(
+            "_score",
+            None
+        )
+
+    print(
+        "BIBLIOTECA AUTORIZADA RESULTADOS:",
+        len(resultados)
+    )
+
+    return resultados[:5]
+
+
+# ============================================================
 # BUSQUEDA
 # ============================================================
 
 def search_music(query):
+
+    # --------------------------------------------------------
+    # PRIMERO: BIBLIOTECA AUTORIZADA
+    # --------------------------------------------------------
+
+    resultados_autorizados = (
+        buscar_autorizadas_por_consulta(
+            query
+        )
+    )
+
+    if resultados_autorizados:
+
+        return resultados_autorizados
+
+    # --------------------------------------------------------
+    # SEGUNDO: JAMENDO
+    # --------------------------------------------------------
 
     resultados_jamendo = jamendo_search(
         query
     )
 
     if resultados_jamendo:
+
         return resultados_jamendo
 
     return []
@@ -1831,10 +1955,11 @@ def webhook():
                     chat_id,
                     "🎵 InfoZonal Music\n\n"
                     "Bot de búsqueda musical de InfoZonal.\n\n"
-                    "Las búsquedas priorizan música descargable "
+                    "Las búsquedas priorizan primero la biblioteca "
+                    "autorizada de InfoZonal y luego música descargable "
                     "desde Jamendo cuando el artista permite la descarga.\n\n"
-                    "Si Jamendo no tiene una descarga autorizada disponible, "
-                    "la canción no estará disponible para descarga por esta vía."
+                    "Si ninguna de las dos fuentes tiene una descarga "
+                    "autorizada disponible, la canción no estará disponible."
                 )
 
                 return "OK", 200
@@ -1848,8 +1973,10 @@ def webhook():
                     "Ejemplo:\n"
                     "Abel Pintos Sin principio ni final\n\n"
                     "El bot muestra hasta 5 resultados.\n\n"
+                    "Primero busca en la biblioteca autorizada de InfoZonal.\n"
+                    "Si no encuentra coincidencias, busca en Jamendo.\n\n"
                     "Las descargas automáticas se realizan únicamente "
-                    "cuando Jamendo indica que la descarga está permitida."
+                    "cuando existe autorización para entregar el audio."
                 )
 
                 return "OK", 200
